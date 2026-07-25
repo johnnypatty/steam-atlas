@@ -53,4 +53,3 @@ jobs:
           path: |
             src-tauri/target/release/steam-atlas.exe
             src-tauri/target/release/bundle/nsis/*
-            src-tauri/target/release/bundle/msi/*
