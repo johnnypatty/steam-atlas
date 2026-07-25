@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Steam Atlas",
+  "version": "0.1.0-beta.1",
+  "identifier": "app.steamatlas.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Steam Atlas",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 650,
+        "center": true,
+        "decorations": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://store.steampowered.com https://api.steampowered.com https://steamcommunity.com https://steamladder.com; img-src 'self' asset: http://asset.localhost https://cdn.cloudflare.steamstatic.com https://avatars.cloudflare.steamstatic.com https://avatars.steamstatic.com https://avatars.fastly.steamstatic.com https://shared.fastly.steamstatic.com https://shared.akamai.steamstatic.com https://cdn.akamai.steamstatic.com https://steamcdn-a.akamaihd.net https://avatars.akamai.steamstatic.com data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "category": "Utility",
+    "shortDescription": "Local-first Steam control center",
+    "longDescription": "Explore Steam, inspect local libraries and accounts, organize manifest metadata, and launch trusted local utilities.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    }
+  }
+}

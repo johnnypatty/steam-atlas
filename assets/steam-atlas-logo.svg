@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Steam Atlas</title>
+  <desc id="desc">A cyan orbital atlas symbol on a dark field.</desc>
+  <defs>
+    <radialGradient id="bg" cx="36%" cy="30%" r="76%">
+      <stop offset="0" stop-color="#152b38"/>
+      <stop offset="1" stop-color="#070b10"/>
+    </radialGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c4f7ff"/>
+      <stop offset=".45" stop-color="#66e3ff"/>
+      <stop offset="1" stop-color="#2ba3cc"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+  <g fill="none" stroke="url(#line)" stroke-width="25" filter="url(#glow)">
+    <ellipse cx="512" cy="512" rx="328" ry="141" transform="rotate(-14 512 512)"/>
+    <ellipse cx="512" cy="512" rx="328" ry="141" transform="rotate(74 512 512)"/>
+    <circle cx="512" cy="512" r="248" opacity=".82"/>
+  </g>
+  <circle cx="512" cy="512" r="78" fill="#66e3ff"/>
+  <circle cx="512" cy="512" r="39" fill="#071018"/>
+  <circle cx="726" cy="262" r="24" fill="#d7faff" filter="url(#glow)"/>
+</svg>
