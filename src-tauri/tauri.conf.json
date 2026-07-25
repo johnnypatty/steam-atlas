@@ -32,7 +32,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
     "category": "Utility",
     "shortDescription": "Local-first Steam control center",
     "longDescription": "Explore Steam, inspect local libraries and accounts, organize manifest metadata, and launch trusted local utilities.",
