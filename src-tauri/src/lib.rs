@@ -83,6 +83,8 @@ struct Game {
     build_id: Option<String>,
     size_on_disk: Option<u64>,
     last_updated: Option<String>,
+    minimum_requirements: Option<String>,
+    recommended_requirements: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -204,6 +206,13 @@ struct ConfigDiff {
     after_lines: usize,
     truncated: bool,
     changes: Vec<ConfigDiffLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtworkInstallResult {
+    target_path: String,
+    backup_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -758,6 +767,8 @@ fn local_game_from_manifest(path: &Path) -> Result<Game, String> {
         build_id,
         size_on_disk,
         last_updated: None,
+        minimum_requirements: None,
+        recommended_requirements: None,
     })
 }
 
@@ -818,6 +829,19 @@ fn price_from_store(data: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("See Steam")
         .to_string()
+}
+
+fn clean_store_text(value: &str) -> String {
+    Html::parse_fragment(value)
+        .root_element()
+        .text()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .take(8_000)
+        .collect()
 }
 
 fn game_from_store(appid: u64, data: &Value) -> Game {
@@ -920,6 +944,16 @@ fn game_from_store(appid: u64, data: &Value) -> Game {
         build_id: None,
         size_on_disk: None,
         last_updated: None,
+        minimum_requirements: data
+            .get("pc_requirements")
+            .and_then(|value| value.get("minimum"))
+            .and_then(Value::as_str)
+            .map(clean_store_text),
+        recommended_requirements: data
+            .get("pc_requirements")
+            .and_then(|value| value.get("recommended"))
+            .and_then(Value::as_str)
+            .map(clean_store_text),
     }
 }
 
@@ -1012,6 +1046,8 @@ async fn search_steam_store(query: String) -> Result<Vec<Game>, String> {
             build_id: None,
             size_on_disk: None,
             last_updated: None,
+            minimum_requirements: None,
+            recommended_requirements: None,
         });
     }
     Ok(games)
@@ -1672,6 +1708,215 @@ fn choose_workspace_artwork(
     Ok(Some(destination.to_string_lossy().to_string()))
 }
 
+fn artwork_stem(app_id: &str, kind: &str) -> Result<String, String> {
+    if app_id.is_empty() || app_id.len() > 20 || !app_id.chars().all(|value| value.is_ascii_digit()) {
+        return Err("The artwork AppID must contain digits only.".to_string());
+    }
+    match kind {
+        "grid" => Ok(app_id.to_string()),
+        "portrait" => Ok(format!("{app_id}p")),
+        "hero" => Ok(format!("{app_id}_hero")),
+        "logo" => Ok(format!("{app_id}_logo")),
+        _ => Err("Unsupported artwork type.".to_string()),
+    }
+}
+
+fn steam_account_grid_root(steam_id: &str) -> Result<(String, PathBuf), String> {
+    const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
+    if steam_id.len() != 17 || !steam_id.chars().all(|value| value.is_ascii_digit()) {
+        return Err("Select a valid local Steam account.".to_string());
+    }
+    let id64 = steam_id
+        .parse::<u64>()
+        .map_err(|_| "The selected SteamID is invalid.".to_string())?;
+    let account_id = id64
+        .checked_sub(STEAM_ID64_BASE)
+        .ok_or("The selected SteamID is outside the supported range.")?
+        .to_string();
+    for root in steam_roots() {
+        let account_root = root.join("userdata").join(&account_id);
+        if account_root.is_dir() {
+            let grid = account_root.join("config/grid");
+            fs::create_dir_all(&grid)
+                .map_err(|error| format!("Could not create the Steam artwork folder: {error}"))?;
+            let grid = grid
+                .canonicalize()
+                .map_err(|error| format!("Could not validate the Steam artwork folder: {error}"))?;
+            return Ok((account_id, grid));
+        }
+    }
+    Err("The selected account's local Steam userdata folder was not found.".to_string())
+}
+
+fn artwork_backup_root(
+    app: &tauri::AppHandle,
+    account_id: &str,
+    app_id: &str,
+    kind: &str,
+) -> Result<PathBuf, String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve Atlas data directory: {error}"))?
+        .join("steam-artwork-backups")
+        .join(account_id)
+        .join(app_id)
+        .join(kind);
+    fs::create_dir_all(&root)
+        .map_err(|error| format!("Could not create Steam artwork history: {error}"))?;
+    root.canonicalize()
+        .map_err(|error| format!("Could not validate Steam artwork history: {error}"))
+}
+
+fn unique_artwork_backup(root: &Path, file_name: &str) -> PathBuf {
+    let timestamp = unix_timestamp();
+    for suffix in 0..10_000_u32 {
+        let name = if suffix == 0 {
+            format!("{timestamp}-{file_name}")
+        } else {
+            format!("{timestamp}-{suffix}-{file_name}")
+        };
+        let candidate = root.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    root.join(format!("{timestamp}-overflow-{file_name}"))
+}
+
+fn current_steam_artwork(grid: &Path, stem: &str) -> Vec<PathBuf> {
+    let mut paths = fs::read_dir(grid)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path.file_stem().and_then(|value| value.to_str()) == Some(stem)
+                && path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|extension| ["jpg", "jpeg", "png", "webp"].contains(&extension.to_ascii_lowercase().as_str()))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn preserve_current_artwork(
+    current: &[PathBuf],
+    backup_root: &Path,
+) -> Result<Option<String>, String> {
+    let mut primary_backup = None;
+    for path in current {
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("artwork.png");
+        let backup = unique_artwork_backup(backup_root, file_name);
+        fs::copy(path, &backup)
+            .map_err(|error| format!("Could not preserve existing Steam artwork: {error}"))?;
+        if primary_backup.is_none() {
+            primary_backup = Some(backup.to_string_lossy().to_string());
+        }
+    }
+    Ok(primary_backup)
+}
+
+#[tauri::command]
+fn install_steam_artwork(
+    app: tauri::AppHandle,
+    app_id: String,
+    steam_id: String,
+    kind: String,
+    source_path: String,
+) -> Result<ArtworkInstallResult, String> {
+    let stem = artwork_stem(&app_id, &kind)?;
+    let source = PathBuf::from(&source_path);
+    if !source.is_file() {
+        return Err("Choose artwork inside this Atlas workspace first.".to_string());
+    }
+    let source = source
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the Atlas artwork: {error}"))?;
+    let managed_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve Atlas data directory: {error}"))?
+        .join("workspace-artwork")
+        .join(&app_id)
+        .canonicalize()
+        .map_err(|error| format!("Could not validate managed artwork storage: {error}"))?;
+    if !source.starts_with(&managed_root)
+        || source.components().any(|part| part.as_os_str().to_string_lossy() == "history")
+    {
+        return Err("Steam artwork must come from the active Atlas workspace asset.".to_string());
+    }
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !["jpg", "jpeg", "png", "webp"].contains(&extension.as_str()) {
+        return Err("Unsupported artwork image format.".to_string());
+    }
+    let (account_id, grid) = steam_account_grid_root(&steam_id)?;
+    let backup_root = artwork_backup_root(&app, &account_id, &app_id, &kind)?;
+    let current = current_steam_artwork(&grid, &stem);
+    let backup_path = preserve_current_artwork(&current, &backup_root)?;
+    for path in current {
+        fs::remove_file(path)
+            .map_err(|error| format!("Could not rotate existing Steam artwork: {error}"))?;
+    }
+    let target = grid.join(format!("{stem}.{extension}"));
+    fs::copy(&source, &target)
+        .map_err(|error| format!("Could not install Steam artwork: {error}"))?;
+    Ok(ArtworkInstallResult {
+        target_path: target.to_string_lossy().to_string(),
+        backup_path,
+    })
+}
+
+#[tauri::command]
+fn restore_steam_artwork(
+    app: tauri::AppHandle,
+    app_id: String,
+    steam_id: String,
+    kind: String,
+    backup_path: String,
+) -> Result<ArtworkInstallResult, String> {
+    let stem = artwork_stem(&app_id, &kind)?;
+    let (account_id, grid) = steam_account_grid_root(&steam_id)?;
+    let backup_root = artwork_backup_root(&app, &account_id, &app_id, &kind)?;
+    let backup = PathBuf::from(&backup_path)
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the artwork backup: {error}"))?;
+    if !backup.is_file() || !backup.starts_with(&backup_root) {
+        return Err("Atlas only restores artwork from its managed history.".to_string());
+    }
+    let extension = backup
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !["jpg", "jpeg", "png", "webp"].contains(&extension.as_str()) {
+        return Err("The artwork backup has an unsupported format.".to_string());
+    }
+    let current = current_steam_artwork(&grid, &stem);
+    let current_backup = preserve_current_artwork(&current, &backup_root)?;
+    for path in current {
+        fs::remove_file(path)
+            .map_err(|error| format!("Could not rotate current Steam artwork: {error}"))?;
+    }
+    let target = grid.join(format!("{stem}.{extension}"));
+    fs::copy(&backup, &target)
+        .map_err(|error| format!("Could not restore Steam artwork: {error}"))?;
+    Ok(ArtworkInstallResult {
+        target_path: target.to_string_lossy().to_string(),
+        backup_path: current_backup,
+    })
+}
+
 fn folder_size_limited(path: &Path, remaining: &mut usize) -> u64 {
     if *remaining == 0 {
         return 0;
@@ -2299,6 +2544,8 @@ async fn fetch_owned_games(steam_id: String, api_key: String) -> Result<Vec<Game
                 build_id: None,
                 size_on_disk: None,
                 last_updated: None,
+                minimum_requirements: None,
+                recommended_requirements: None,
             })
         })
         .collect())
@@ -2390,6 +2637,8 @@ pub fn run() {
             export_screenshot,
             compare_config_files,
             choose_workspace_artwork,
+            install_steam_artwork,
+            restore_steam_artwork,
             scan_orphaned_game_folders,
             analyze_crash_log,
             system_diagnostics,
@@ -2470,5 +2719,23 @@ mod tests {
         assert!(!redacted.contains("192.168.1.2"));
         assert!(!redacted.contains("secret"));
         assert!(redacted.contains("[STEAM_ID]"));
+    }
+
+    #[test]
+    fn artwork_names_follow_steam_grid_conventions() {
+        assert_eq!(artwork_stem("730", "grid").unwrap(), "730");
+        assert_eq!(artwork_stem("730", "portrait").unwrap(), "730p");
+        assert_eq!(artwork_stem("730", "hero").unwrap(), "730_hero");
+        assert_eq!(artwork_stem("730", "logo").unwrap(), "730_logo");
+        assert!(artwork_stem("../730", "grid").is_err());
+        assert!(artwork_stem("730", "unknown").is_err());
+    }
+
+    #[test]
+    fn store_requirement_html_is_reduced_to_bounded_text() {
+        let text = clean_store_text("<strong>Minimum:</strong><br>Windows 10 &amp; 8 GB RAM");
+        assert!(text.contains("Minimum:"));
+        assert!(text.contains("Windows 10 & 8 GB RAM"));
+        assert!(!text.contains('<'));
     }
 }
