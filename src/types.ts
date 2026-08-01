@@ -108,6 +108,11 @@ export interface PlatformInfo {
   flatpakSteam: boolean;
   secureStorage: string;
   packageFormats: string[];
+  steamDeck?: boolean;
+  desktopSession?: string;
+  gamescopeAvailable?: boolean;
+  mangoHudAvailable?: boolean;
+  protonRoots?: string[];
 }
 
 export interface AccountProfile {
@@ -126,6 +131,103 @@ export interface BackupRecord {
   createdAt: string;
   fileCount: number;
   totalBytes: number;
+  appId?: string;
+  locationId?: string;
+  kind?: "save" | "config" | "recovery";
+}
+
+export type LibraryStatus =
+  | "Backlog"
+  | "Next"
+  | "Playing"
+  | "Finished"
+  | "Dropped"
+  | "Replay";
+
+export interface ManagedLocation {
+  id: string;
+  label: string;
+  path: string;
+  kind: "save" | "config";
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface GameLaunchProfile {
+  id: string;
+  name: string;
+  appId: string;
+  arguments: string[];
+  protonVersion?: string;
+  backupBeforeLaunch: boolean;
+  saveLocationIds: string[];
+  createdAt: string;
+  lastLaunchedAt?: string;
+}
+
+export interface GameSession {
+  id: string;
+  appId: string;
+  profileId?: string;
+  profileName: string;
+  launchedAt: string;
+}
+
+export interface GameWorkspaceData {
+  appId: string;
+  favorite: boolean;
+  status: LibraryStatus;
+  rating: number;
+  notes: string;
+  tags: string[];
+  compatibilityNotes: string;
+  preferredProtonVersion: string;
+  saveLocations: ManagedLocation[];
+  configLocations: ManagedLocation[];
+  launchProfiles: GameLaunchProfile[];
+  backups: BackupRecord[];
+  screenshotFavorites: string[];
+  screenshotTags: Record<string, string[]>;
+  customArtwork: Partial<Record<ArtworkKind, string>>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ArtworkKind = "grid" | "portrait" | "hero" | "logo";
+
+export interface ConfigDiffLine {
+  line: number;
+  before?: string;
+  after?: string;
+}
+
+export interface ConfigDiff {
+  beforePath: string;
+  afterPath: string;
+  beforeLines: number;
+  afterLines: number;
+  truncated: boolean;
+  changes: ConfigDiffLine[];
+}
+
+export interface AtlasUserData {
+  schemaVersion: number;
+  workspaces: Record<string, GameWorkspaceData>;
+  sessions: GameSession[];
+}
+
+export interface BackupPreview {
+  backupPath: string;
+  destinationPath: string;
+  fileCount: number;
+  totalBytes: number;
+  recoveryWillBeCreated: boolean;
+}
+
+export interface RestoreResult {
+  restoredFileCount: number;
+  restoredBytes: number;
+  recoveryBackup: BackupRecord;
 }
 
 export interface ScreenshotRecord {
@@ -151,4 +253,19 @@ export interface CrashReport {
   summary: string;
   suggestions: string[];
   excerpt: string;
+}
+
+export interface SystemDiagnostics {
+  appVersion: string;
+  os: string;
+  architecture: string;
+  cpu: string;
+  memoryBytes?: number;
+  steamRoots: string[];
+  flatpakSteam: boolean;
+  steamDeck: boolean;
+  desktopSession: string;
+  secureStorage: string;
+  packageFormats: string[];
+  notes: string[];
 }
