@@ -128,21 +128,21 @@ const features: {
 }[] = [
   { id: "save-vault", title: "Save Vault", description: "Version local save folders into dated snapshots.", icon: DatabaseBackup, badge: "READY" },
   { id: "launch-profiles", title: "Launch Profiles", description: "Save AppIDs and launch arguments as reusable presets.", icon: Play, badge: "READY" },
-  { id: "config-manager", title: "Config Manager", description: "Snapshot configuration folders before you tweak them.", icon: FileCog, badge: "BETA" },
+  { id: "config-manager", title: "Config Manager", description: "Snapshot configuration folders before you tweak them.", icon: FileCog, badge: "READY" },
   { id: "update-intel", title: "Update Intelligence", description: "Track local BuildIDs and jump to authoritative history.", icon: RefreshCcw, badge: "READY" },
   { id: "analytics", title: "Library Analytics", description: "Summarize footprint, platforms and collection health.", icon: BarChart3, badge: "READY" },
   { id: "backlog", title: "Backlog Board", description: "Keep a private, local play queue with clear states.", icon: ListChecks, badge: "READY" },
   { id: "screenshots", title: "Screenshot Studio", description: "Index recent Steam screenshots across local accounts.", icon: Image, badge: "DESKTOP" },
   { id: "achievements", title: "Achievement Lens", description: "Open read-only public achievement pages per account.", icon: Trophy, badge: "PUBLIC" },
-  { id: "compatibility", title: "Compatibility Desk", description: "Review platform hints and ProtonDB resources.", icon: MonitorCog, badge: "BETA" },
+  { id: "compatibility", title: "Compatibility Desk", description: "Review platform hints and ProtonDB resources.", icon: MonitorCog, badge: "READY" },
   { id: "orphans", title: "Orphan Scanner", description: "Preview unregistered common-folder leftovers safely.", icon: ScanSearch, badge: "PREVIEW" },
   { id: "duplicates", title: "Duplicate Analyzer", description: "Spot repeated title names and install paths.", icon: Copy, badge: "READY" },
   { id: "mods", title: "Mod Command Center", description: "Associate mod folders and utilities with AppIDs.", icon: Wrench, badge: "LOCAL" },
   { id: "watchlist", title: "Price Watchlist", description: "Refresh current Steam store pricing on demand.", icon: Star, badge: "READY" },
   { id: "timeline", title: "Session Timeline", description: "Keep a local history of launches made through Atlas.", icon: Clock3, badge: "READY" },
-  { id: "crash", title: "Crash Assistant", description: "Classify common crash-log patterns without uploading.", icon: Bug, badge: "BETA" },
+  { id: "crash", title: "Crash Assistant", description: "Classify common crash-log patterns without uploading.", icon: Bug, badge: "LOCAL" },
   { id: "account-compare", title: "Account Compare", description: "Compare safe metadata for identities on this PC.", icon: Users, badge: "READY" },
-  { id: "artwork", title: "Artwork Board", description: "Save custom artwork references for any AppID.", icon: Palette, badge: "BETA" },
+  { id: "artwork", title: "Artwork Board", description: "Save custom artwork references for any AppID.", icon: Palette, badge: "READY" },
   { id: "command-palette", title: "Command Palette", description: "Navigate and run core actions from Ctrl+K.", icon: Command, badge: "LIVE" },
   { id: "tray", title: "Tray Mode", description: "Hide Atlas and restore it from its notification icon.", icon: Boxes, badge: "DESKTOP" },
   { id: "portable", title: "Portable Settings", description: "Export appearance and region settings without secrets.", icon: CloudDownload, badge: "SAFE" }
@@ -291,7 +291,7 @@ export function PowerSuite({
     <div className="page power-page">
       <div className="page-header">
         <div>
-          <span className="eyebrow">BETA 0.2 · POWER SUITE</span>
+          <span className="eyebrow">STEAM ATLAS 1.0 · POWER SUITE</span>
           <h1>Twenty useful tools, one safe workspace.</h1>
           <p>
             Local-first helpers for games you own—no entitlement changes,
