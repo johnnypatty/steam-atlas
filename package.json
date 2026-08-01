@@ -1,7 +1,7 @@
 {
   "name": "steam-atlas",
   "private": true,
-  "version": "0.1.0-beta.1",
+  "version": "0.2.0-beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:build": "tauri build",
+    "desktop:windows": "tauri build --bundles nsis",
+    "desktop:linux": "tauri build --bundles appimage,deb",
+    "check": "npm run build && npm audit --audit-level=high"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

@@ -1,81 +1,83 @@
-# Steam Atlas Beta 0.1
+# Steam Atlas Beta 0.2
 
-Steam Atlas is a Windows-first, local-first Steam companion built with Tauri 2,
-Rust, React and TypeScript. It combines store discovery, local library and
-account inspection, manifest organization, safe backup utilities, executable
-launching, and a 20-tool Power Suite.
+<p align="center">
+  <img src="assets/steam-atlas-logo.svg" width="112" alt="Steam Atlas Atlas Node logo" />
+</p>
+
+Steam Atlas is a local-first Steam companion for Windows and Linux, built with
+Tauri 2, Rust, React and TypeScript. It unifies store discovery, legitimate
+local-library intelligence, account display data, manifest inspection, backups,
+trusted-tool launching and a twenty-workbench Power Suite.
+
+> Beta software. Keep independent backups of important data. Steam Atlas is not
+> affiliated with Valve, SteamDB, Steam Ladder, ProtonDB or Kaspersky.
 
 ![Steam Atlas overview](steam-atlas-preview.png)
 
-> Beta software: keep backups of important data. Steam Atlas is independent and
-> is not affiliated with Valve, SteamDB, Steam Ladder, or Kaspersky.
+## Why Beta 0.2 matters
 
-## Beta 0.1 highlights
+- Windows 10/11 and Linux support, including native, Flatpak and secondary
+  Steam libraries plus Proton-aware diagnostics.
+- API keys moved out of WebView `localStorage` into Windows Credential Manager
+  or Linux Secret Service. Legacy plaintext values are migrated and removed.
+- New **Atlas Node** identity across editable SVG, application icons and social
+  preview assets.
+- System, dark, light and OLED themes; custom backgrounds; independent panel,
+  sidebar and top-bar opacity; blur, saturation, density, scale, radius,
+  reduced motion and dual accent colors.
+- Keyless local/public account avatars and resilient local-cache/multi-CDN game
+  artwork fallbacks.
+- Canonical path checks, argument limits, file-size limits, strict external URL
+  allowlists, HTTPS timeouts and bounded network responses.
+- Windows portable EXE/NSIS and Linux AppImage/DEB build pipelines.
+- CodeQL, `cargo audit`, `npm audit`, Dependabot and a controlled draft-release
+  workflow.
 
-- Release builds no longer open a second console window.
-- The Windows build script reports the real exit code and only marks freshly
-  generated `.exe`, NSIS, and MSI files as successful.
-- Account avatars load without a Steam Web API key: Atlas checks Steam's local
-  avatar cache, then the account's public Steam Community XML profile.
-- Game artwork checks Steam's local library cache, then a multi-CDN fallback
-  chain, and finally a generated placeholder.
-- The white native currency menu is replaced by a consistent dark dropdown.
-- Full appearance studio: presets, a custom background, opacity, blur,
-  saturation, overlay, panel/sidebar/top-bar transparency, two accents, glow,
-  radius, density, scale, OLED mode, and reduced motion.
-- Global `Ctrl+K` command palette and Windows notification-area tray mode.
+## Core features
 
-## The 20-feature Power Suite
+- Steam Store search by title or exact AppID, including games, DLC, demos and
+  tools returned by Steam.
+- Local account discovery from `config/loginusers.vdf` without reading Steam
+  passwords, Steam Guard secrets, sentry files or session tokens.
+- Installed-library indexing from legitimate `appmanifest_*.acf` files across
+  `libraryfolders.vdf` locations.
+- Manifest Vault for inspecting local `.acf` and `.manifest` metadata.
+- Authorized SteamCMD launcher. SteamCMD—not Atlas—handles authentication,
+  Steam Guard and entitlement enforcement.
+- Tools Hub for explicitly selected Windows executables/scripts and Linux
+  AppImages/scripts, using argument arrays rather than arbitrary command text.
+- `Ctrl+K` command palette, tray restore, safe settings export/import and
+  local/offline fallbacks.
 
-1. Save Vault — dated copies of explicitly selected save folders.
+Steam Atlas does not fabricate licenses, depot keys or entitlements; unlock
+paid content; modify achievements; or automatically delete detected folders.
+
+## The Power Suite
+
+1. Save Vault — dated backups of explicitly selected folders.
 2. Launch Profiles — reusable AppID and launch-argument presets.
 3. Config Manager — configuration snapshots before edits.
-4. Update Intelligence — local BuildIDs with SteamDB history links.
-5. Library Analytics — collection, platform, and disk-footprint summaries.
-6. Backlog Board — local Backlog, Playing, Completed, and Paused lists.
+4. Update Intelligence — local BuildIDs with external history links.
+5. Library Analytics — platform and disk-footprint summaries.
+6. Backlog Board — Backlog, Playing, Completed and Paused lists.
 7. Screenshot Studio — read-only indexing of recent Steam screenshots.
-8. Achievement Lens — read-only public Steam achievement pages.
+8. Achievement Lens — read-only public progress pages.
 9. Compatibility Desk — local platform hints and ProtonDB links.
-10. Orphan Scanner — preview-only detection; it never deletes folders.
+10. Orphan Scanner — preview-only detection; no deletion endpoint.
 11. Duplicate Analyzer — repeated title and install-path detection.
 12. Mod Command Center — local AppID associations and Tools Hub integration.
 13. Price Watchlist — on-demand Steam Store price refreshes.
-14. Session Timeline — local history for launches made through Atlas profiles.
-15. Crash Assistant — local signature checks for common text logs and dumps.
+14. Session Timeline — local history for Atlas profile launches.
+15. Crash Assistant — bounded local signature checks for logs and dumps.
 16. Account Compare — safe local/public metadata comparison.
-17. Artwork Board — custom artwork references with Steam CDN fallbacks.
+17. Artwork Board — custom references with official Steam CDN fallbacks.
 18. Command Palette — keyboard navigation and common actions.
-19. Tray Mode — hide to and restore from the Windows notification area.
-20. Portable Settings — secret-free appearance and region export/import.
-
-The Power Suite is intentionally conservative. It does not modify
-achievements, remove orphan folders, bypass Steam ownership, scrape SteamDB, or
-upload private files.
-
-## Existing core features
-
-- Steam Store search by title or exact AppID, including games, DLC, demos, and
-  tools returned by Steam.
-- Local Steam library discovery and parsing of legitimate
-  `appmanifest_*.acf` files across configured library folders.
-- Local account discovery from `config/loginusers.vdf`; no password, Steam
-  Guard secret, refresh token, or sentry-file access.
-- Optional Steam Web API owned-library data and optional Steam Ladder ranking
-  data.
-- Manifest Vault for importing and inspecting `.acf` and `.manifest` metadata.
-- Authorized SteamCMD launcher. SteamCMD itself handles login, Steam Guard, and
-  entitlement enforcement.
-- Tools Hub for explicitly selected `.exe`, `.com`, `.bat`, `.cmd`, `.ps1`,
-  and `.lnk` files, with arguments and working directories.
-
-Steam Atlas does not fabricate licenses, depot keys, or Steam entitlements. A
-manifest identifies content; it does not grant ownership.
+19. Tray Mode — hide and restore from the desktop tray.
+20. Portable Settings — secret-free appearance and region transfer.
 
 ## Build on Windows
 
-### 1. Install prerequisites
-
-Use 64-bit Windows 10 or 11 and install:
+Install Git, Node.js LTS, Rust and the Visual Studio C++ build tools:
 
 ```powershell
 winget install --id Git.Git -e
@@ -84,129 +86,91 @@ winget install --id Rustlang.Rustup -e
 winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
 
-Windows 11 normally includes WebView2. If it is absent:
+Then, from the project directory:
 
 ```powershell
-winget install --id Microsoft.EdgeWebView2Runtime -e
-```
-
-Restart PowerShell and confirm:
-
-```powershell
-node --version
-npm --version
-rustc --version
-cargo --version
-```
-
-### 2. Run or build
-
-Open PowerShell in the extracted project:
-
-```powershell
-npm install
+npm ci
 npm run desktop:dev
-```
-
-Build the production app and installers:
-
-```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
 ```
 
-Fresh output is reported individually:
+Fresh output:
 
-- Portable app: `src-tauri\target\release\steam-atlas.exe`
-- NSIS: `src-tauri\target\release\bundle\nsis\`
-- MSI: `src-tauri\target\release\bundle\msi\`
+- Portable: `src-tauri\target\release\steam-atlas.exe`
+- Installer: `src-tauri\target\release\bundle\nsis\`
 
-The first Rust build takes longer because Cargo downloads and compiles the
-native dependencies.
+## Build on Linux
 
-### If installer packaging says “no such host”
+Ubuntu/Debian prerequisites:
 
-Your earlier build compiled the portable application successfully, then Tauri
-could not resolve `github.com` while obtaining its NSIS packaging dependency.
-That is a DNS/network failure, not a source-code compile failure.
-
-Check:
-
-```powershell
-Resolve-DnsName github.com
-Test-NetConnection github.com -Port 443
+```bash
+sudo apt-get update
+sudo apt-get install -y curl build-essential libwebkit2gtk-4.1-dev \
+  libappindicator3-dev librsvg2-dev patchelf libssl-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-Then retry `npm run desktop:build`. A VPN, DNS filter, firewall, antivirus web
-filter, or temporary DNS outage can cause this. The fixed script now returns
-the failure instead of printing a false success.
+Install Node.js 22 LTS, restart the shell, then run:
 
-## Steam API key and avatars
-
-You do **not** need to verify a phone number just to get Atlas account avatars.
-Beta 0.1 reads the local Steam avatar cache first and can query public Steam
-Community profile XML without an API key. Private profiles or offline systems
-fall back to initials.
-
-A normal Steam Web API key remains optional for richer owned-game/profile
-statistics. Only verify your phone if you independently want that Steam
-feature and are comfortable doing so; Atlas does not require it for local
-scanning, avatars, artwork, backups, or the Tools Hub.
-
-## Why antivirus software may warn
-
-Self-built Windows apps are unsigned and have little reputation. Steam Atlas
-also performs behaviors that heuristic scanners watch closely: it reads local
-Steam configuration, makes HTTPS requests, opens file dialogs, launches
-user-selected programs, can start SteamCMD, and creates local backups. That
-combination can cause a false-positive even when the source is clean.
-
-Before allowing a detection:
-
-1. Record the exact Kaspersky detection name and affected file.
-2. Update Kaspersky databases and rebuild from this source.
-3. Check the file with
-   [Kaspersky Threat Intelligence Portal](https://opentip.kaspersky.com/) or
-   use [Kaspersky's false-positive guidance](https://support.kaspersky.com/1870)
-   to request reanalysis.
-4. Prefer a file-specific exclusion over excluding the whole project or Steam
-   directory.
-5. For public releases, code-sign the executable and installer. Reputation
-   improves over time, but signing is not a guarantee against every heuristic.
-
-See [SECURITY.md](SECURITY.md) for the trust boundary and reporting guidance.
-
-## Browser-only development
-
-```powershell
-npm run dev
+```bash
+./scripts/build-linux.sh
 ```
 
-Browser mode uses clearly marked sample data and cannot scan folders, open
-native dialogs, create backups, use the tray, or launch executables.
+Fresh output:
+
+- AppImage: `src-tauri/target/release/bundle/appimage/`
+- Debian package: `src-tauri/target/release/bundle/deb/`
+
+The AppImage/DEB must be produced on Linux; the NSIS installer must be produced
+on Windows. GitHub Actions builds both on native runners.
+
+## Development and checks
+
+```bash
+npm ci
+npm run check
+npm run desktop:dev
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Browser preview mode (`npm run dev`) uses clearly marked sample data and cannot
+scan folders, access the credential vault, create backups or launch programs.
+
+## Security model
+
+- Optional API keys are protected by the logged-in OS account's credential
+  vault and excluded from exports.
+- External URLs must use HTTPS and match a small destination allowlist; the
+  only allowed Steam URI is `steam://open/games`.
+- Executables are canonicalized, extension-checked and launched only after
+  explicit selection. Arguments remain an array and are bounded.
+- Backgrounds, manifests, logs and network responses have size limits.
+- Backup recursion skips symbolic links. Orphan results are previews only.
+
+Review [SECURITY.md](SECURITY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+before extending native capabilities.
 
 ## Project map
 
 | Path | Purpose |
 | --- | --- |
-| `src/App.tsx` | Navigation, main pages, settings, and command palette |
-| `src/PowerSuite.tsx` | All 20 beta workbenches |
-| `src/components/` | Resilient artwork and custom dark controls |
-| `src/styles.css` | Visual system, appearance engine, and responsive layout |
-| `src/bridge.ts` | Typed frontend-to-Rust command bridge |
-| `src/types.ts` | Shared frontend data shapes |
-| `src-tauri/src/lib.rs` | Steam scans, profile lookup, backups, dialogs, tray, and launching |
-| `src-tauri/tauri.conf.json` | Window, CSP, local asset, and installer configuration |
-| `scripts/build-windows.ps1` | Reliable Windows build and artifact reporting |
-| `CUSTOMIZATION.md` | Practical customization guide |
+| `src/App.tsx` | Navigation, pages, settings and command palette |
+| `src/PowerSuite.tsx` | Twenty local-first workbenches |
+| `src/components/` | Atlas Node, artwork recovery and accessible controls |
+| `src/styles.css` | Responsive visual and theme system |
+| `src/bridge.ts` | Typed frontend-to-Rust command boundary |
+| `src-tauri/src/lib.rs` | Steam scans, vault access, backups and safe launching |
+| `.github/workflows/` | Windows/Linux build, security and release automation |
+| `CUSTOMIZATION.md` | Branding and appearance guide |
+| `CONTRIBUTING.md` | Contribution and validation rules |
 
-## Validation
+## Antivirus notes
 
-- TypeScript strict check and Vite production build: passed.
-- Dependency audit: zero known vulnerabilities at packaging time.
-- Tauri configuration inspection: passed.
-- The current delivery environment does not contain Rust or Windows build
-  tools, so compile the native Beta 0.1 changes on Windows or use the included
-  GitHub Actions workflow before publishing a release.
+Unsigned desktop software that reads Steam configuration, opens file dialogs,
+creates backups and launches user-selected programs can trigger reputation or
+behavioral heuristics. Do not assume every alert is a false positive. Record the
+exact detection and SHA-256, rebuild from the tagged source, submit the file to
+the vendor for analysis and never ask users to disable antivirus globally.
 
 ## License
 

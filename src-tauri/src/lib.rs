@@ -1,7 +1,8 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use keyring::Entry;
 use regex::Regex;
 use scraper::{Html, Selector};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashSet,
@@ -13,6 +14,30 @@ use std::{
 };
 use tauri::Manager;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use url::Url;
+
+const MAX_LOCAL_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const SECRET_SERVICE: &str = "app.steamatlas.desktop";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SecretBundle {
+    steam_api_key: String,
+    steam_ladder_api_key: String,
+    backend: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformInfo {
+    os: String,
+    architecture: String,
+    steam_roots: Vec<String>,
+    flatpak_steam: bool,
+    secure_storage: String,
+    package_formats: Vec<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -150,6 +175,7 @@ fn steam_roots() -> Vec<PathBuf> {
     } else if let Some(home) = dirs::home_dir() {
         candidates.push(home.join(".steam/steam"));
         candidates.push(home.join(".local/share/Steam"));
+        candidates.push(home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"));
         candidates.push(home.join("Library/Application Support/Steam"));
     }
 
@@ -186,7 +212,63 @@ fn unix_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(6))
+        .timeout(Duration::from_secs(14))
+        .user_agent("Steam-Atlas/0.2 (+local desktop application)")
+        .build()
+        .map_err(|error| format!("Could not initialize the network client: {error}"))
+}
+
+async fn fetch_json<T: DeserializeOwned>(url: &str, max_bytes: u64) -> Result<T, String> {
+    let response = http_client()?
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("Network request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Remote service returned HTTP {}.", response.status()));
+    }
+    if response.content_length().is_some_and(|length| length > max_bytes) {
+        return Err("Remote response exceeded Atlas safety limits.".to_string());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("Could not read the remote response: {error}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err("Remote response exceeded Atlas safety limits.".to_string());
+    }
+    serde_json::from_slice(&bytes).map_err(|error| format!("Remote response was invalid: {error}"))
+}
+
+async fn fetch_text(url: &str, max_bytes: u64) -> Result<String, String> {
+    let response = http_client()?
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("Network request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Remote service returned HTTP {}.", response.status()));
+    }
+    if response.content_length().is_some_and(|length| length > max_bytes) {
+        return Err("Remote response exceeded Atlas safety limits.".to_string());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("Could not read the remote response: {error}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err("Remote response exceeded Atlas safety limits.".to_string());
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|_| "Remote response was not valid UTF-8.".to_string())
+}
+
 fn data_url_for_file(path: &Path) -> Option<String> {
+    if fs::metadata(path).ok()?.len() > MAX_LOCAL_IMAGE_BYTES {
+        return None;
+    }
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -201,6 +283,86 @@ fn data_url_for_file(path: &Path) -> Option<String> {
     };
     let bytes = fs::read(path).ok()?;
     Some(format!("data:{mime};base64,{}", BASE64.encode(bytes)))
+}
+
+fn secret_entry(name: &str) -> Result<Entry, String> {
+    match name {
+        "steam-web-api" | "steam-ladder-api" => Entry::new(SECRET_SERVICE, name)
+            .map_err(|error| format!("Credential vault is unavailable: {error}")),
+        _ => Err("Unsupported credential name.".to_string()),
+    }
+}
+
+fn read_secret(name: &str) -> Result<String, String> {
+    let entry = secret_entry(name)?;
+    match entry.get_password() {
+        Ok(value) => Ok(value),
+        Err(keyring::Error::NoEntry) => Ok(String::new()),
+        Err(error) => Err(format!("Could not read the protected credential: {error}")),
+    }
+}
+
+fn write_secret(name: &str, value: &str) -> Result<(), String> {
+    let entry = secret_entry(name)?;
+    if value.trim().is_empty() {
+        return match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(format!("Could not clear the protected credential: {error}")),
+        };
+    }
+    if value.len() > 4096 || value.chars().any(|character| character == '\0') {
+        return Err("Credential value is invalid or unexpectedly large.".to_string());
+    }
+    entry
+        .set_password(value.trim())
+        .map_err(|error| format!("Could not protect the credential: {error}"))
+}
+
+#[tauri::command]
+fn load_secrets() -> Result<SecretBundle, String> {
+    Ok(SecretBundle {
+        steam_api_key: read_secret("steam-web-api")?,
+        steam_ladder_api_key: read_secret("steam-ladder-api")?,
+        backend: if cfg!(target_os = "windows") {
+            "Windows Credential Manager".to_string()
+        } else if cfg!(target_os = "linux") {
+            "Linux Secret Service".to_string()
+        } else {
+            "Operating-system credential vault".to_string()
+        },
+    })
+}
+
+#[tauri::command]
+fn save_secrets(steam_api_key: String, steam_ladder_api_key: String) -> Result<(), String> {
+    write_secret("steam-web-api", &steam_api_key)?;
+    write_secret("steam-ladder-api", &steam_ladder_api_key)
+}
+
+#[tauri::command]
+fn platform_info() -> PlatformInfo {
+    let roots = steam_roots();
+    PlatformInfo {
+        os: std::env::consts::OS.to_string(),
+        architecture: std::env::consts::ARCH.to_string(),
+        flatpak_steam: roots.iter().any(|path| path.to_string_lossy().contains(".var/app/")),
+        steam_roots: roots
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+        secure_storage: if cfg!(target_os = "windows") {
+            "Windows Credential Manager".to_string()
+        } else if cfg!(target_os = "linux") {
+            "Linux Secret Service".to_string()
+        } else {
+            "Native credential vault".to_string()
+        },
+        package_formats: if cfg!(target_os = "windows") {
+            vec!["Portable EXE".to_string(), "NSIS".to_string()]
+        } else {
+            vec!["AppImage".to_string(), "DEB".to_string()]
+        },
+    }
 }
 
 fn xml_value(content: &str, tag: &str) -> Option<String> {
@@ -297,25 +459,7 @@ async fn fetch_account_profile_no_key(steam_id: String) -> Result<AccountProfile
     }
 
     let url = format!("https://steamcommunity.com/profiles/{steam_id}?xml=1");
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|error| format!("Could not prepare Steam profile lookup: {error}"))?
-        .get(&url)
-        .header("User-Agent", "Steam-Atlas/0.1 (+local desktop application)")
-        .send()
-        .await
-        .map_err(|error| format!("Steam Community profile lookup failed: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Steam Community returned HTTP {} for this profile.",
-            response.status()
-        ));
-    }
-    let content = response
-        .text()
-        .await
-        .map_err(|error| format!("Could not read Steam Community profile: {error}"))?;
+    let content = fetch_text(&url, 1024 * 1024).await?;
 
     Ok(AccountProfile {
         steam_id: steam_id.clone(),
@@ -349,7 +493,11 @@ fn local_game_from_manifest(path: &Path) -> Result<Game, String> {
         ),
         price: "Owned".to_string(),
         app_type: "Game".to_string(),
-        platforms: vec!["Windows".to_string()],
+        platforms: vec![if cfg!(target_os = "linux") {
+            "Linux / Proton".to_string()
+        } else {
+            "Windows".to_string()
+        }],
         review: "Local install".to_string(),
         review_score: 0,
         players: None,
@@ -536,12 +684,7 @@ async fn fetch_store_app(app_id: u64) -> Result<Game, String> {
     let url = format!(
         "https://store.steampowered.com/api/appdetails?appids={app_id}&l=english"
     );
-    let response: Value = reqwest::get(url)
-        .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
-        .map_err(|error| error.to_string())?;
+    let response: Value = fetch_json(&url, 5 * 1024 * 1024).await?;
     let app_key = app_id.to_string();
     let root = response
         .get(app_key.as_str())
@@ -559,16 +702,14 @@ async fn search_steam_store(query: String) -> Result<Vec<Game>, String> {
     if clean.is_empty() {
         return Ok(Vec::new());
     }
+    if clean.chars().count() > 120 {
+        return Err("Search query is limited to 120 characters.".to_string());
+    }
     let url = format!(
         "https://store.steampowered.com/search/results/?query&term={}&start=0&count=24&infinite=1&l=english",
         urlencoding::encode(clean)
     );
-    let payload: StoreSearchResponse = reqwest::get(url)
-        .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
-        .map_err(|error| error.to_string())?;
+    let payload: StoreSearchResponse = fetch_json(&url, 5 * 1024 * 1024).await?;
     let document = Html::parse_fragment(&payload.results_html);
     let row_selector = Selector::parse("a.search_result_row").map_err(|e| e.to_string())?;
     let title_selector = Selector::parse(".title").map_err(|e| e.to_string())?;
@@ -634,10 +775,14 @@ async fn search_steam_store(query: String) -> Result<Vec<Game>, String> {
 
 #[tauri::command]
 fn choose_executable() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    let extensions = ["exe", "com", "bat", "cmd", "ps1", "lnk"].as_slice();
+    #[cfg(not(target_os = "windows"))]
+    let extensions = ["AppImage", "sh", "run", "bin"].as_slice();
     let file = rfd::FileDialog::new()
         .add_filter(
             "Applications and scripts",
-            &["exe", "com", "bat", "cmd", "ps1", "lnk"],
+            extensions,
         )
         .pick_file();
     Ok(file.map(|path| path.to_string_lossy().to_string()))
@@ -645,6 +790,9 @@ fn choose_executable() -> Result<Option<String>, String> {
 
 fn manifest_entry(path: &Path) -> Result<ManifestEntry, String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_MANIFEST_BYTES {
+        return Err("Manifest exceeds the 4 MiB inspection limit.".to_string());
+    }
     let content = fs::read_to_string(path).unwrap_or_default();
     let file_name = path
         .file_name()
@@ -701,6 +849,11 @@ fn choose_background_image(app: tauri::AppHandle) -> Result<Option<String>, Stri
     else {
         return Ok(None);
     };
+    let metadata = fs::metadata(&source)
+        .map_err(|error| format!("Could not inspect the selected image: {error}"))?;
+    if metadata.len() > MAX_LOCAL_IMAGE_BYTES {
+        return Err("Background image must be 12 MiB or smaller.".to_string());
+    }
     let extension = source
         .extension()
         .and_then(|value| value.to_str())
@@ -1068,6 +1221,18 @@ fn analyze_crash_log() -> Result<Option<CrashReport>, String> {
 
 #[tauri::command]
 fn export_portable_settings(json: String) -> Result<Option<String>, String> {
+    if json.len() > 256 * 1024 {
+        return Err("Settings export exceeds the 256 KiB limit.".to_string());
+    }
+    let mut value: Value = serde_json::from_str(&json)
+        .map_err(|_| "Settings export is not valid JSON.".to_string())?;
+    let object = value
+        .as_object_mut()
+        .ok_or("Settings export must be a JSON object.")?;
+    object.remove("steamApiKey");
+    object.remove("steamLadderApiKey");
+    let safe_json = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("Could not serialize safe settings: {error}"))?;
     let Some(path) = rfd::FileDialog::new()
         .set_file_name("steam-atlas-settings.json")
         .add_filter("JSON", &["json"])
@@ -1075,7 +1240,7 @@ fn export_portable_settings(json: String) -> Result<Option<String>, String> {
     else {
         return Ok(None);
     };
-    fs::write(&path, json).map_err(|error| error.to_string())?;
+    fs::write(&path, safe_json).map_err(|error| error.to_string())?;
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
@@ -1087,9 +1252,17 @@ fn import_portable_settings() -> Result<Option<String>, String> {
     else {
         return Ok(None);
     };
-    fs::read_to_string(path)
-        .map(Some)
-        .map_err(|error| error.to_string())
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.len() > 256 * 1024 {
+        return Err("Settings import exceeds the 256 KiB limit.".to_string());
+    }
+    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let value: Value = serde_json::from_str(&content)
+        .map_err(|_| "Settings file is not valid JSON.".to_string())?;
+    if !value.is_object() {
+        return Err("Settings file must contain a JSON object.".to_string());
+    }
+    Ok(Some(content))
 }
 
 #[tauri::command]
@@ -1102,28 +1275,44 @@ fn launch_external_tool(
     if !executable.is_file() {
         return Err("The selected executable no longer exists.".to_string());
     }
+    let executable = executable
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the selected file: {error}"))?;
+    if args.len() > 128
+        || args
+            .iter()
+            .any(|value| value.len() > 4096 || value.chars().any(|character| character == '\0'))
+    {
+        return Err("The launch arguments exceed Atlas safety limits.".to_string());
+    }
     let extension = executable
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let allowed = ["exe", "com", "bat", "cmd", "ps1", "lnk"];
+    #[cfg(target_os = "windows")]
+    let allowed = ["exe", "com", "bat", "cmd", "ps1", "lnk"].as_slice();
+    #[cfg(not(target_os = "windows"))]
+    let allowed = ["appimage", "sh", "run", "bin"].as_slice();
     if !allowed.contains(&extension.as_str()) {
         return Err("Atlas only launches explicitly selected executables or scripts.".to_string());
     }
 
+    #[cfg(target_os = "windows")]
     let mut command = if extension == "ps1" {
         let mut shell = Command::new("powershell.exe");
         shell.args(["-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-File"]);
-        shell.arg(&path);
+        shell.arg(&executable);
         shell
     } else if extension == "bat" || extension == "cmd" {
         let mut shell = Command::new("cmd.exe");
-        shell.args(["/C", &path]);
+        shell.arg("/C").arg(&executable);
         shell
     } else {
-        Command::new(&path)
+        Command::new(&executable)
     };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = Command::new(&executable);
     command.args(args);
 
     if let Some(directory) = working_directory.filter(|value| !value.trim().is_empty()) {
@@ -1131,6 +1320,9 @@ fn launch_external_tool(
         if !directory_path.is_dir() {
             return Err("The configured working directory does not exist.".to_string());
         }
+        let directory_path = directory_path
+            .canonicalize()
+            .map_err(|error| format!("Could not validate the working directory: {error}"))?;
         command.current_dir(directory_path);
     } else if let Some(parent) = executable.parent() {
         command.current_dir(parent);
@@ -1139,20 +1331,36 @@ fn launch_external_tool(
     command
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("Windows could not launch this file: {error}"))
+        .map_err(|error| format!("The operating system could not launch this file: {error}"))
 }
 
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
-    let allowed = [
-        "https://",
-        "http://",
-        "steam://",
-    ];
-    if !allowed.iter().any(|prefix| url.starts_with(prefix)) {
-        return Err("Atlas blocked an unsupported link scheme.".to_string());
+    let parsed = Url::parse(&url).map_err(|_| "Atlas blocked an invalid link.".to_string())?;
+    if !is_trusted_external_url(&parsed) {
+        return Err("Atlas blocked a link outside its trusted destination list.".to_string());
     }
-    open::that(url).map_err(|error| error.to_string())
+    open::that(parsed.as_str()).map_err(|error| error.to_string())
+}
+
+fn is_trusted_external_url(parsed: &Url) -> bool {
+    let permitted = match parsed.scheme() {
+        "https" => parsed.host_str().is_some_and(|host| {
+            let host = host.to_ascii_lowercase();
+            [
+                "steampowered.com",
+                "steamcommunity.com",
+                "steamdb.info",
+                "steamladder.com",
+                "protondb.com",
+            ]
+            .iter()
+            .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+        }),
+        "steam" => parsed.host_str() == Some("open") && parsed.path() == "/games",
+        _ => false,
+    };
+    permitted
 }
 
 #[tauri::command]
@@ -1171,15 +1379,24 @@ fn run_steamcmd_download(
     manifest_id: Option<String>,
 ) -> Result<(), String> {
     let executable = PathBuf::from(&steam_cmd_path);
-    if !executable.is_file()
-        || executable
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map(|value| !value.eq_ignore_ascii_case("steamcmd.exe"))
-            .unwrap_or(true)
-    {
-        return Err("Select the official steamcmd.exe executable.".to_string());
+    if !executable.is_file() {
+        return Err("Select the official SteamCMD executable.".to_string());
     }
+    let executable_name = executable
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let expected_name = if cfg!(target_os = "windows") {
+        executable_name.eq_ignore_ascii_case("steamcmd.exe")
+    } else {
+        executable_name == "steamcmd.sh" || executable_name == "steamcmd"
+    };
+    if !expected_name {
+        return Err("Select the official SteamCMD executable for this operating system.".to_string());
+    }
+    let executable = executable
+        .canonicalize()
+        .map_err(|error| format!("Could not validate SteamCMD: {error}"))?;
     let valid_account = Regex::new(r"^[A-Za-z0-9_.-]{1,64}$")
         .map_err(|error| error.to_string())?;
     if !valid_account.is_match(&account_name) {
@@ -1236,12 +1453,7 @@ async fn fetch_owned_games(steam_id: String, api_key: String) -> Result<Vec<Game
         urlencoding::encode(api_key.trim()),
         steam_id
     );
-    let payload: Value = reqwest::get(url)
-        .await
-        .map_err(|error| error.to_string())?
-        .json()
-        .await
-        .map_err(|error| error.to_string())?;
+    let payload: Value = fetch_json(&url, 8 * 1024 * 1024).await?;
     let values = payload
         .pointer("/response/games")
         .and_then(Value::as_array)
@@ -1296,7 +1508,7 @@ async fn fetch_steam_ladder(
         return Err("A Steam Ladder API key is required.".to_string());
     }
     let url = format!("https://steamladder.com/api/v1/profile/{steam_id}/");
-    let response = reqwest::Client::new()
+    let response = http_client()?
         .get(url)
         .header("Authorization", format!("Token {}", api_key.trim()))
         .send()
@@ -1308,7 +1520,14 @@ async fn fetch_steam_ladder(
             response.status()
         ));
     }
-    response.json().await.map_err(|error| error.to_string())
+    if response.content_length().is_some_and(|length| length > 4 * 1024 * 1024) {
+        return Err("Steam Ladder response exceeded Atlas safety limits.".to_string());
+    }
+    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err("Steam Ladder response exceeded Atlas safety limits.".to_string());
+    }
+    serde_json::from_slice(&bytes).map_err(|error| error.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1337,6 +1556,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            platform_info,
+            load_secrets,
+            save_secrets,
             detect_steam_accounts,
             fetch_account_profile_no_key,
             scan_installed_games,
@@ -1361,4 +1583,41 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Steam Atlas");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_url_allowlist_accepts_expected_destinations() {
+        for value in [
+            "https://store.steampowered.com/app/730",
+            "https://steamcommunity.com/profiles/76561198000000000",
+            "https://steamdb.info/app/730/",
+            "https://www.protondb.com/app/730",
+            "steam://open/games",
+        ] {
+            assert!(is_trusted_external_url(&Url::parse(value).unwrap()), "{value}");
+        }
+    }
+
+    #[test]
+    fn external_url_allowlist_rejects_lookalikes_and_unsafe_schemes() {
+        for value in [
+            "https://steamcommunity.com.attacker.example/",
+            "http://store.steampowered.com/",
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "steam://run/730",
+        ] {
+            assert!(!is_trusted_external_url(&Url::parse(value).unwrap()), "{value}");
+        }
+    }
+
+    #[test]
+    fn vdf_capture_unescapes_windows_paths() {
+        let value = capture_vdf_value(r#""path" "D:\\SteamLibrary""#, "path");
+        assert_eq!(value.as_deref(), Some(r"D:\SteamLibrary"));
+    }
 }

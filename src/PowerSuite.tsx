@@ -290,7 +290,7 @@ export function PowerSuite({
     <div className="page power-page">
       <div className="page-header">
         <div>
-          <span className="eyebrow">BETA 0.1 · POWER SUITE</span>
+          <span className="eyebrow">BETA 0.2 · POWER SUITE</span>
           <h1>Twenty useful tools, one safe workspace.</h1>
           <p>
             Local-first helpers for games you own—no entitlement changes,
@@ -592,14 +592,16 @@ function UpdateWorkbench({ library, onLink }: { library: Game[]; onLink: (url: s
 
 function AnalyticsWorkbench({ library }: { library: Game[] }) {
   const total = library.reduce((sum, game) => sum + (game.sizeOnDisk || 0), 0);
-  const windows = library.filter((game) => game.platforms.includes("Windows")).length;
+  const desktopReady = library.filter((game) =>
+    game.platforms.some((platform) => ["Windows", "Linux", "Linux / Proton"].includes(platform))
+  ).length;
   const largest = [...library].sort((a, b) => (b.sizeOnDisk || 0) - (a.sizeOnDisk || 0)).slice(0, 5);
   return (
     <div className="workbench-body">
       <div className="metric-grid">
         <Metric label="Indexed games" value={String(library.length)} />
         <Metric label="Total footprint" value={bytes(total)} />
-        <Metric label="Windows titles" value={String(windows)} />
+        <Metric label="Desktop-ready" value={String(desktopReady)} />
         <Metric label="Known BuildIDs" value={String(library.filter((game) => game.buildId).length)} />
       </div>
       <div className="rank-list">
@@ -700,7 +702,7 @@ function CompatibilityWorkbench({ library, onLink }: { library: Game[]; onLink: 
     <div className="workbench-body">
       <div className="metric-grid">
         <Metric label="Atlas platform" value={navigator.platform || "Desktop"} />
-        <Metric label="Windows-ready" value={String(library.filter((game) => game.platforms.includes("Windows")).length)} />
+        <Metric label="Windows/Linux-ready" value={String(library.filter((game) => game.platforms.some((platform) => ["Windows", "Linux", "Linux / Proton"].includes(platform))).length)} />
         <Metric label="Deck verified" value={String(library.filter((game) => game.deck === "Verified").length)} />
         <Metric label="Deck playable" value={String(library.filter((game) => game.deck === "Playable").length)} />
       </div>

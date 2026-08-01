@@ -6,6 +6,7 @@ import type {
   Game,
   ManifestEntry,
   OrphanRecord,
+  PlatformInfo,
   ScreenshotRecord,
   SteamAccount
 } from "./types";
@@ -31,6 +32,13 @@ async function desktopInvoke<T>(
 }
 
 export const bridge = {
+  platformInfo: () => desktopInvoke<PlatformInfo>("platform_info"),
+  loadSecrets: () =>
+    desktopInvoke<{ steamApiKey: string; steamLadderApiKey: string; backend: string }>(
+      "load_secrets"
+    ),
+  saveSecrets: (steamApiKey: string, steamLadderApiKey: string) =>
+    desktopInvoke<void>("save_secrets", { steamApiKey, steamLadderApiKey }),
   detectAccounts: () => desktopInvoke<SteamAccount[]>("detect_steam_accounts"),
   scanLibrary: () => desktopInvoke<Game[]>("scan_installed_games"),
   searchStore: (query: string) =>

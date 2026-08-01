@@ -1,6 +1,6 @@
 [package]
 name = "steam-atlas"
-version = "0.1.0-beta.1"
+version = "0.2.0-beta.1"
 description = "A local-first Steam control center"
 authors = ["Steam Atlas contributors"]
 edition = "2021"
@@ -24,3 +24,5 @@ dirs = "6"
 urlencoding = "2"
 open = "5"
 base64 = "0.22"
+keyring = "=4.1.5"
+url = "2"

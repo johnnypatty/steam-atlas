@@ -17,14 +17,14 @@ makes Windows treat the result as a different application.
 
 ## Use the in-app appearance studio
 
-Open **Settings → Appearance** before editing code. Beta 0.1 can change:
+Open **Settings → Appearance** before editing code. Beta 0.2 can change:
 
 - primary and secondary accents;
 - four built-in backgrounds or one custom JPG/PNG/WebP;
 - background opacity, blur, saturation, and dark overlay;
 - panel, sidebar, and top-bar opacity;
 - glow strength, corner radius, interface scale, and density; and
-- OLED-black and reduced-motion modes.
+- system/light/dark themes, OLED black and reduced-motion modes.
 
 The custom background is copied into Atlas's application-data directory, so
 moving the original image does not break the app. **Export safe settings**
@@ -69,8 +69,9 @@ the desktop icon set:
 npx tauri icon .\assets\steam-atlas-logo.svg
 ```
 
-Tauri writes the Windows and cross-platform icon files to `src-tauri\icons`.
-Rebuild the installer afterward.
+Tauri writes the Windows, Linux and cross-platform icon files to
+`src-tauri/icons`. Rebuild both platform packages afterward. The matching
+repository banner lives at `assets/social-preview.svg`.
 
 ## Change the preview catalogue
 
@@ -96,8 +97,9 @@ All 20 workbenches live in `src/PowerSuite.tsx`.
 6. Add responsive styles under the Power Suite section of `src/styles.css`.
 
 The small `useStoredState` helper is appropriate for personal lists and
-preferences. Large indexes, binary files, and secrets should not go into
-`localStorage`.
+preferences. Large indexes and binary files should not go into `localStorage`.
+Secrets must use the narrow `load_secrets`/`save_secrets` native boundary backed
+by Windows Credential Manager or Linux Secret Service.
 
 ## Add a navigation page
 
@@ -160,16 +162,16 @@ Do not scrape SteamDB. SteamDB states that automated scraping is prohibited and
 that it does not provide a public API. Atlas therefore links to SteamDB and
 retrieves comparable base data from Steam.
 
-## Improve key storage
+## Extend protected key storage
 
-The starter stores optional API keys in WebView local storage for simplicity.
-The production-grade upgrade is Windows Credential Manager:
+Beta 0.2 already stores optional keys in Windows Credential Manager or Linux
+Secret Service through narrow Rust commands. When adding another credential:
 
-1. Add a maintained credential-storage Rust crate.
-2. Expose narrow `save_api_key`, `has_api_key` and `delete_api_key` commands.
-3. Never return the full stored key to the frontend after saving.
-4. Redact keys from Rust errors and logs.
-5. Migrate old local values and delete them after successful secure storage.
+1. Add its fixed identifier to the Rust allowlist.
+2. Reuse the native keyring boundary; never place the value in `localStorage`.
+3. Keep portable exports defensively redacted in Rust as well as TypeScript.
+4. Redact values from errors, logs, diagnostics and screenshots.
+5. Add migration and deletion behavior for any replaced identifier.
 
 ## Add SQLite
 
@@ -208,11 +210,11 @@ Suggested tables:
 
 1. Commit source only; `.gitignore` already excludes `node_modules`, `dist`,
    and Rust build output.
-2. Push to `main`. `.github/workflows/windows-build.yml` performs the web
-   build, dependency audit, native Windows build, and uploads the EXE/MSI/NSIS
-   output as a workflow artifact.
-3. Test that artifact on a clean Windows account.
-4. Create a version tag such as `v0.1.0-beta.1`.
-5. Before a broad public release, obtain a code-signing certificate and sign
-   both the executable and installer in your release workflow.
-6. Enable GitHub private vulnerability reporting/security advisories.
+2. Open a pull request. `.github/workflows/windows-build.yml` runs the web gate,
+   Rust tests, native Windows NSIS build and native Linux AppImage/DEB build.
+3. Test both artifacts on clean Windows and Linux accounts.
+4. Create a version tag such as `v0.2.0-beta.1`.
+5. Run the **Draft prerelease** workflow and inspect its draft before publish.
+6. Before a broad public release, obtain platform-appropriate signing keys and
+   keep them in GitHub encrypted secrets, never in source.
+7. Enable GitHub private vulnerability reporting/security advisories.
