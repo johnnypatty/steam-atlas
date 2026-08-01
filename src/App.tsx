@@ -186,6 +186,7 @@ function App() {
     ...loadJson<Partial<AppSettings>>("atlas.settings", {})
   }));
   const [showToolModal, setShowToolModal] = useState(false);
+  const [pendingToolLaunch, setPendingToolLaunch] = useState<ExternalTool | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -443,7 +444,7 @@ function App() {
     }
   };
 
-  const launchTool = async (tool: ExternalTool) => {
+  const performToolLaunch = async (tool: ExternalTool) => {
     if (!isDesktop()) {
       notify("Executable launching is enabled in the compiled desktop app.");
       return;
@@ -460,6 +461,14 @@ function App() {
     } catch (error) {
       notify(error instanceof Error ? error.message : "The tool did not launch.");
     }
+  };
+
+  const launchTool = async (tool: ExternalTool) => {
+    if (!tool.trustedAt) {
+      setPendingToolLaunch(tool);
+      return;
+    }
+    await performToolLaunch(tool);
   };
 
   const addManualTool = (tool: Omit<ExternalTool, "id" | "favorite">) => {
@@ -710,6 +719,7 @@ function App() {
       {workspaceGame && (
         <GameWorkspace
           game={workspaceGame}
+          tools={tools}
           workspace={userData.workspaces[String(workspaceGame.appid)] ?? {
             appId: String(workspaceGame.appid),
             favorite: false,
@@ -749,8 +759,22 @@ function App() {
           accent={settings.accent}
         />
       )}
+      {pendingToolLaunch && (
+        <ConfirmToolLaunch
+          tool={pendingToolLaunch}
+          onCancel={() => setPendingToolLaunch(null)}
+          onConfirm={() => {
+            const trusted = { ...pendingToolLaunch, trustedAt: new Date().toISOString() };
+            setTools((current) => current.map((tool) => tool.id === trusted.id ? trusted : tool));
+            setPendingToolLaunch(null);
+            void performToolLaunch(trusted);
+          }}
+        />
+      )}
       {paletteOpen && (
         <CommandPalette
+          games={library}
+          workspaces={userData.workspaces}
           onClose={() => setPaletteOpen(false)}
           onNavigate={(target) => {
             setPage(target);
@@ -763,6 +787,10 @@ function App() {
           onImport={() => {
             setPaletteOpen(false);
             void importManifests();
+          }}
+          onGame={(game) => {
+            setWorkspaceGame(game);
+            setPaletteOpen(false);
           }}
         />
       )}
@@ -1923,7 +1951,7 @@ function ToolsHub({
                 <code>{tool.path}</code>
               </div>
               <div className="tool-meta">
-                <span>{tool.category}</span>
+                <span>{tool.category} · {tool.trustedAt ? "Trusted" : "Review required"}</span>
                 <small>
                   {tool.lastLaunched
                     ? `Last run ${new Date(tool.lastLaunched).toLocaleDateString()}`
@@ -2896,16 +2924,43 @@ function ToolModal({
   );
 }
 
+function ConfirmToolLaunch({
+  tool,
+  onCancel,
+  onConfirm
+}: {
+  tool: ExternalTool;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onMouseDown={onCancel}>
+      <div className="modal trust-modal" role="alertdialog" aria-modal="true" aria-labelledby="trust-tool-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-heading"><span><ShieldCheck size={22} /></span><div><p className="eyebrow">FIRST-LAUNCH REVIEW</p><h2 id="trust-tool-title">Trust {tool.name}?</h2><p>Atlas will remember this approval for the current tool entry. Re-adding the file requires another review.</p></div></div>
+        <dl className="trust-details"><div><dt>Executable or script</dt><dd><code>{tool.path}</code></dd></div><div><dt>Arguments</dt><dd>{tool.args.length ? tool.args.map((argument) => <code key={argument}>{argument}</code>) : <span>None</span>}</dd></div><div><dt>Working directory</dt><dd><code>{tool.workingDirectory || "Executable folder"}</code></dd></div></dl>
+        <div className="safe-note"><ShieldCheck size={17} /> Only approve files you selected and recognize. Atlas does not verify the publisher or safety of third-party software.</div>
+        <div className="modal-actions"><button className="secondary-button" onClick={onCancel}>Cancel</button><button className="primary-button" onClick={onConfirm}><Play size={15} /> Trust and launch</button></div>
+      </div>
+    </div>
+  );
+}
+
 function CommandPalette({
+  games,
+  workspaces,
   onClose,
   onNavigate,
   onScan,
-  onImport
+  onImport,
+  onGame
 }: {
+  games: Game[];
+  workspaces: Record<string, GameWorkspaceData>;
   onClose: () => void;
   onNavigate: (page: Page) => void;
   onScan: () => void;
   onImport: () => void;
+  onGame: (game: Game) => void;
 }) {
   const [filter, setFilter] = useState("");
   const commands = [
@@ -2929,10 +2984,27 @@ function CommandPalette({
       detail: "Manifest Vault",
       icon: FileArchive,
       action: onImport
-    }
+    },
+    ...games.map((game) => ({
+      id: `game-${game.appid}`,
+      label: game.name,
+      detail: `Game workspace · AppID ${game.appid}${workspaces[String(game.appid)]?.status ? ` · ${workspaces[String(game.appid)].status}` : ""}`,
+      icon: Gamepad2,
+      action: () => onGame(game)
+    }))
   ].filter((item) =>
     `${item.label} ${item.detail}`.toLowerCase().includes(filter.toLowerCase())
-  );
+  ).sort((left, right) => {
+    const leftGame = left.id.startsWith("game-");
+    const rightGame = right.id.startsWith("game-");
+    if (leftGame !== rightGame) return leftGame ? 1 : -1;
+    if (leftGame && rightGame) {
+      const leftFavorite = workspaces[left.id.slice(5)]?.favorite ? 1 : 0;
+      const rightFavorite = workspaces[right.id.slice(5)]?.favorite ? 1 : 0;
+      if (leftFavorite !== rightFavorite) return rightFavorite - leftFavorite;
+    }
+    return left.label.localeCompare(right.label);
+  }).slice(0, 18);
 
   return (
     <div className="modal-backdrop command-backdrop" onMouseDown={onClose}>
