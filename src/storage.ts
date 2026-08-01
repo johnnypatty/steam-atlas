@@ -32,6 +32,7 @@ export const emptyWorkspace = (appId: string): GameWorkspaceData => ({
   configLocations: [],
   launchProfiles: [],
   backups: [],
+  backupRetentionCount: 10,
   screenshotFavorites: [],
   screenshotTags: {},
   customArtwork: {},
@@ -94,6 +95,7 @@ export const normalizeWorkspace = (
       ? value.launchProfiles.slice(0, 64).map((profile) => normalizeProfile(profile, appId))
       : [],
     backups: Array.isArray(value.backups) ? value.backups.slice(0, 250) : [],
+    backupRetentionCount: Math.max(1, Math.min(50, Number(value.backupRetentionCount) || 10)),
     screenshotFavorites: Array.isArray(value.screenshotFavorites)
       ? value.screenshotFavorites.filter((item): item is string => typeof item === "string").slice(0, 1_000)
       : [],
