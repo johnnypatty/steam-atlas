@@ -17,7 +17,7 @@ makes Windows treat the result as a different application.
 
 ## Use the in-app appearance studio
 
-Open **Settings → Appearance** before editing code. Beta 0.2 can change:
+Open **Settings → Appearance** before editing code. Steam Atlas 1.0 can change:
 
 - primary and secondary accents;
 - four built-in backgrounds or one custom JPG/PNG/WebP;
@@ -164,7 +164,7 @@ retrieves comparable base data from Steam.
 
 ## Extend protected key storage
 
-Beta 0.2 already stores optional keys in Windows Credential Manager or Linux
+Steam Atlas already stores optional keys in Windows Credential Manager or Linux
 Secret Service through narrow Rust commands. When adding another credential:
 
 1. Add its fixed identifier to the Rust allowlist.
@@ -213,7 +213,7 @@ Suggested tables:
 2. Open a pull request. `.github/workflows/windows-build.yml` runs the web gate,
    Rust tests, native Windows NSIS build and native Linux AppImage/DEB build.
 3. Test both artifacts on clean Windows and Linux accounts.
-4. Create a version tag such as `v0.2.0-beta.1`.
+4. Create a qualified tag such as `v1.0.0-rc.1`, then follow the release checklist.
 5. Run the **Draft prerelease** workflow and inspect its draft before publish.
 6. Before a broad public release, obtain platform-appropriate signing keys and
    keep them in GitHub encrypted secrets, never in source.

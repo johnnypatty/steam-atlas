@@ -19,16 +19,17 @@
 | Malicious external links | Parsed URLs; HTTPS-only host allowlist; one narrow Steam URI |
 | Oversized or hostile local input | Manifest, background, log and settings limits; bounded image previews |
 | Oversized remote response | Connect/request timeouts, status checks and byte limits |
-| Accidental data deletion | Orphan scanner is preview-only; no native delete command |
+| Snapshot tampering | SHA-256 sidecar manifests; verification before restore; legacy snapshots labeled unverified |
+| Accidental data deletion | Orphan scanner remains preview-only; snapshot cleanup requires confirmation and accepts only complete top-level Atlas vault folders |
 | Entitlement bypass | Steam/SteamCMD remain authoritative; no license or depot-key fabrication |
 | Supply-chain regression | npm audit, cargo audit, CodeQL, Dependabot and lockfile-based npm installs |
 
-## Out of scope for Beta 0.2
+## Out of scope for 1.0
 
 - Protection from malware already running as the same operating-system user.
 - Code signing and publisher reputation; release workflows are prepared, but a
   private signing certificate is not stored in the repository.
-- Automatic destructive cleanup or unattended restore.
+- Automatic destructive cleanup, unattended restore or cloud backup.
 - Reverse engineering of Steam protocols or DRM.
 
 Any new native command must document the user gesture, validated inputs,

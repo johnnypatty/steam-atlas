@@ -1,14 +1,21 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
   AccountProfile,
+  AppSecurityInfo,
+  ArtworkInstallResult,
+  BackupPreview,
   BackupRecord,
+  BackupIntegrityResult,
+  ConfigDiff,
   CrashReport,
   Game,
   ManifestEntry,
   OrphanRecord,
   PlatformInfo,
+  RestoreResult,
   ScreenshotRecord,
-  SteamAccount
+  SteamAccount,
+  SystemDiagnostics
 } from "./types";
 
 declare global {
@@ -32,7 +39,12 @@ async function desktopInvoke<T>(
 }
 
 export const bridge = {
+  appSecurityInfo: () => desktopInvoke<AppSecurityInfo>("app_security_info"),
   platformInfo: () => desktopInvoke<PlatformInfo>("platform_info"),
+  loadUserData: () => desktopInvoke<string | null>("load_user_data"),
+  saveUserData: (json: string) => desktopInvoke<void>("save_user_data", { json }),
+  exportUserData: (json: string) => desktopInvoke<string | null>("export_user_data", { json }),
+  importUserData: () => desktopInvoke<string | null>("import_user_data"),
   loadSecrets: () =>
     desktopInvoke<{ steamApiKey: string; steamLadderApiKey: string; backend: string }>(
       "load_secrets"
@@ -89,10 +101,40 @@ export const bridge = {
   chooseFolder: () => desktopInvoke<string | null>("choose_folder"),
   backupFolder: (sourcePath: string) =>
     desktopInvoke<BackupRecord>("backup_folder", { sourcePath }),
+  verifyBackupIntegrity: (backupPath: string) =>
+    desktopInvoke<BackupIntegrityResult>("verify_backup_integrity", { backupPath }),
+  deleteBackupSnapshot: (backupPath: string) =>
+    desktopInvoke<void>("delete_backup_snapshot", { backupPath }),
+  previewRestore: (backupPath: string, destinationPath: string) =>
+    desktopInvoke<BackupPreview>("preview_backup_restore", {
+      backupPath,
+      destinationPath
+    }),
+  restoreBackup: (backupPath: string, destinationPath: string) =>
+    desktopInvoke<RestoreResult>("restore_backup", {
+      backupPath,
+      destinationPath
+    }),
+  launchSteamGame: (appId: string, args: string[]) =>
+    desktopInvoke<void>("launch_steam_game", { appId, args }),
+  revealPath: (path: string) => desktopInvoke<void>("reveal_path", { path }),
   scanScreenshots: () =>
     desktopInvoke<ScreenshotRecord[]>("scan_steam_screenshots"),
+  scanGameScreenshots: (appId: string) =>
+    desktopInvoke<ScreenshotRecord[]>("scan_game_screenshots", { appId }),
+  exportScreenshot: (path: string) =>
+    desktopInvoke<string | null>("export_screenshot", { path }),
+  compareConfigFiles: () => desktopInvoke<ConfigDiff | null>("compare_config_files"),
+  chooseWorkspaceArtwork: (appId: string, kind: "grid" | "portrait" | "hero" | "logo") =>
+    desktopInvoke<string | null>("choose_workspace_artwork", { appId, kind }),
+  installSteamArtwork: (appId: string, steamId: string, kind: "grid" | "portrait" | "hero" | "logo", sourcePath: string) =>
+    desktopInvoke<ArtworkInstallResult>("install_steam_artwork", { appId, steamId, kind, sourcePath }),
+  restoreSteamArtwork: (appId: string, steamId: string, kind: "grid" | "portrait" | "hero" | "logo", backupPath: string) =>
+    desktopInvoke<ArtworkInstallResult>("restore_steam_artwork", { appId, steamId, kind, backupPath }),
   scanOrphans: () => desktopInvoke<OrphanRecord[]>("scan_orphaned_game_folders"),
   analyzeCrashLog: () => desktopInvoke<CrashReport | null>("analyze_crash_log"),
+  systemDiagnostics: () => desktopInvoke<SystemDiagnostics>("system_diagnostics"),
+  exportDiagnostics: (json: string) => desktopInvoke<string | null>("export_diagnostics", { json }),
   exportSettings: (json: string) =>
     desktopInvoke<string | null>("export_portable_settings", { json }),
   importSettings: () =>

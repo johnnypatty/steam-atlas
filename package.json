@@ -1,18 +1,19 @@
 {
   "name": "steam-atlas",
   "private": true,
-  "version": "0.2.0-beta.1",
+  "version": "1.0.0-rc.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "desktop:windows": "tauri build --bundles nsis",
     "desktop:linux": "tauri build --bundles appimage,deb",
-    "check": "npm run build && npm audit --audit-level=high"
+    "check": "npm run test && npm run build && npm audit --audit-level=high"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
@@ -27,6 +28,7 @@
     "@vitejs/plugin-react": "^5.1.4",
     "esbuild": "^0.28.1",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5"
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   }
 }

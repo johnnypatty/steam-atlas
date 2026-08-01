@@ -49,7 +49,8 @@ import type {
   OrphanRecord,
   Page,
   ScreenshotRecord,
-  SteamAccount
+  SteamAccount,
+  SystemDiagnostics
 } from "./types";
 
 type FeatureId =
@@ -127,21 +128,21 @@ const features: {
 }[] = [
   { id: "save-vault", title: "Save Vault", description: "Version local save folders into dated snapshots.", icon: DatabaseBackup, badge: "READY" },
   { id: "launch-profiles", title: "Launch Profiles", description: "Save AppIDs and launch arguments as reusable presets.", icon: Play, badge: "READY" },
-  { id: "config-manager", title: "Config Manager", description: "Snapshot configuration folders before you tweak them.", icon: FileCog, badge: "BETA" },
+  { id: "config-manager", title: "Config Manager", description: "Snapshot configuration folders before you tweak them.", icon: FileCog, badge: "READY" },
   { id: "update-intel", title: "Update Intelligence", description: "Track local BuildIDs and jump to authoritative history.", icon: RefreshCcw, badge: "READY" },
   { id: "analytics", title: "Library Analytics", description: "Summarize footprint, platforms and collection health.", icon: BarChart3, badge: "READY" },
   { id: "backlog", title: "Backlog Board", description: "Keep a private, local play queue with clear states.", icon: ListChecks, badge: "READY" },
   { id: "screenshots", title: "Screenshot Studio", description: "Index recent Steam screenshots across local accounts.", icon: Image, badge: "DESKTOP" },
   { id: "achievements", title: "Achievement Lens", description: "Open read-only public achievement pages per account.", icon: Trophy, badge: "PUBLIC" },
-  { id: "compatibility", title: "Compatibility Desk", description: "Review platform hints and ProtonDB resources.", icon: MonitorCog, badge: "BETA" },
+  { id: "compatibility", title: "Compatibility Desk", description: "Review platform hints and ProtonDB resources.", icon: MonitorCog, badge: "READY" },
   { id: "orphans", title: "Orphan Scanner", description: "Preview unregistered common-folder leftovers safely.", icon: ScanSearch, badge: "PREVIEW" },
   { id: "duplicates", title: "Duplicate Analyzer", description: "Spot repeated title names and install paths.", icon: Copy, badge: "READY" },
   { id: "mods", title: "Mod Command Center", description: "Associate mod folders and utilities with AppIDs.", icon: Wrench, badge: "LOCAL" },
   { id: "watchlist", title: "Price Watchlist", description: "Refresh current Steam store pricing on demand.", icon: Star, badge: "READY" },
   { id: "timeline", title: "Session Timeline", description: "Keep a local history of launches made through Atlas.", icon: Clock3, badge: "READY" },
-  { id: "crash", title: "Crash Assistant", description: "Classify common crash-log patterns without uploading.", icon: Bug, badge: "BETA" },
+  { id: "crash", title: "Crash Assistant", description: "Classify common crash-log patterns without uploading.", icon: Bug, badge: "LOCAL" },
   { id: "account-compare", title: "Account Compare", description: "Compare safe metadata for identities on this PC.", icon: Users, badge: "READY" },
-  { id: "artwork", title: "Artwork Board", description: "Save custom artwork references for any AppID.", icon: Palette, badge: "BETA" },
+  { id: "artwork", title: "Artwork Board", description: "Save custom artwork references for any AppID.", icon: Palette, badge: "READY" },
   { id: "command-palette", title: "Command Palette", description: "Navigate and run core actions from Ctrl+K.", icon: Command, badge: "LIVE" },
   { id: "tray", title: "Tray Mode", description: "Hide Atlas and restore it from its notification icon.", icon: Boxes, badge: "DESKTOP" },
   { id: "portable", title: "Portable Settings", description: "Export appearance and region settings without secrets.", icon: CloudDownload, badge: "SAFE" }
@@ -290,7 +291,7 @@ export function PowerSuite({
     <div className="page power-page">
       <div className="page-header">
         <div>
-          <span className="eyebrow">BETA 0.2 · POWER SUITE</span>
+          <span className="eyebrow">STEAM ATLAS 1.0 · POWER SUITE</span>
           <h1>Twenty useful tools, one safe workspace.</h1>
           <p>
             Local-first helpers for games you own—no entitlement changes,
@@ -399,6 +400,7 @@ export function PowerSuite({
             report={crashReport}
             analyze={analyzeCrash}
             busy={busy === "crash"}
+            notify={notify}
           />
         )}
         {active === "account-compare" && <AccountWorkbench accounts={accounts} />}
@@ -853,10 +855,36 @@ function TimelineWorkbench({ items }: { items: SessionItem[] }) {
   );
 }
 
-function CrashWorkbench({ report, analyze, busy }: { report: CrashReport | null; analyze: () => void; busy: boolean }) {
+function CrashWorkbench({ report, analyze, busy, notify }: { report: CrashReport | null; analyze: () => void; busy: boolean; notify: (message: string) => void }) {
+  const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [diagnosticBusy, setDiagnosticBusy] = useState(false);
+  const inspectSystem = async () => {
+    setDiagnosticBusy(true);
+    try {
+      setDiagnostics(await bridge.systemDiagnostics());
+      notify("Local system diagnostics generated.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not generate diagnostics.");
+    } finally {
+      setDiagnosticBusy(false);
+    }
+  };
+  const exportReport = async () => {
+    try {
+      const path = await bridge.exportDiagnostics(JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        system: diagnostics,
+        crash: report
+      }));
+      if (path) notify(`Redacted diagnostic report exported to ${path}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not export diagnostics.");
+    }
+  };
   return (
     <div className="workbench-body">
-      <button className="primary-button" onClick={analyze} disabled={busy}><Bug size={16} /> {busy ? "Analyzing…" : "Choose crash log"}</button>
+      <div className="diagnostic-actions"><button className="primary-button" onClick={analyze} disabled={busy}><Bug size={16} /> {busy ? "Analyzing…" : "Choose crash log"}</button><button className="secondary-button" onClick={inspectSystem} disabled={diagnosticBusy}><MonitorCog size={16} /> {diagnosticBusy ? "Inspecting…" : "Generate system report"}</button><button className="secondary-button" onClick={exportReport} disabled={!diagnostics && !report}><CloudDownload size={16} /> Export redacted JSON</button></div>
+      {diagnostics && <div className="diagnostic-summary"><Metric label="Atlas version" value={diagnostics.appVersion} /><Metric label="Host" value={`${diagnostics.os} · ${diagnostics.architecture}`} /><Metric label="Steam roots" value={String(diagnostics.steamRoots.length)} /><Metric label="Steam Deck" value={diagnostics.steamDeck ? "Detected" : "No"} /><article><strong>CPU</strong><span>{diagnostics.cpu}</span></article><article><strong>Credential storage</strong><span>{diagnostics.secureStorage}</span></article><div className="safe-note"><ShieldCheck size={17} /> Nothing is uploaded. Exports are scrubbed again by the native backend before being written.</div></div>}
       {report ? <div className="crash-report"><header><span>{report.confidence} confidence</span><h3>{report.category}</h3><p>{report.summary}</p></header><ul>{report.suggestions.map((tip) => <li key={tip}><CheckCircle2 size={14} /> {tip}</li>)}</ul><pre>{report.excerpt}</pre></div> : <p className="workbench-empty">TXT, LOG and DMP files are inspected locally for common error signatures.</p>}
     </div>
   );

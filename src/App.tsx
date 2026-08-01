@@ -9,6 +9,7 @@ import {
   BookOpen,
   Boxes,
   Check,
+  CheckCircle2,
   ChevronDown,
   CircleGauge,
   Clock3,
@@ -67,10 +68,22 @@ import {
   sampleTools
 } from "./data";
 import { PowerSuite } from "./PowerSuite";
+import { GameWorkspace } from "./GameWorkspace";
+import {
+  loadAtlasData,
+  parseAtlasData,
+  saveAtlasData,
+  serializeAtlasData,
+  withWorkspace
+} from "./storage";
 import type {
+  AtlasUserData,
+  AppSecurityInfo,
   AppSettings,
+  DashboardWidget,
   ExternalTool,
   Game,
+  GameWorkspaceData,
   ManifestEntry,
   Page,
   PlatformInfo,
@@ -101,7 +114,12 @@ const defaultSettings: AppSettings = {
   density: "comfortable",
   oledMode: false,
   reduceMotion: false,
-  theme: "system"
+  highContrast: false,
+  deckMode: false,
+  dashboardWidgets: ["stats", "discovery", "quickActions", "systemStatus"],
+  theme: "system",
+  updateChannel: "manual",
+  onboardingComplete: false
 };
 
 const navItems: { id: Page; label: string; icon: typeof Activity }[] = [
@@ -114,6 +132,13 @@ const navItems: { id: Page; label: string; icon: typeof Activity }[] = [
   { id: "power", label: "Power Suite", icon: Zap },
   { id: "settings", label: "Settings", icon: Settings }
 ];
+
+const dashboardWidgetOrder: DashboardWidget[] = ["stats", "discovery", "quickActions", "systemStatus"];
+
+const normalizeDashboardWidgets = (value: unknown): DashboardWidget[] =>
+  Array.isArray(value)
+    ? dashboardWidgetOrder.filter((widget) => value.includes(widget))
+    : [...dashboardWidgetOrder];
 
 const loadJson = <T,>(key: string, fallback: T): T => {
   try {
@@ -156,6 +181,9 @@ function App() {
   const [searchResults, setSearchResults] = useState<Game[]>(featuredGames);
   const [searching, setSearching] = useState(false);
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+  const [workspaceGame, setWorkspaceGame] = useState<Game | null>(null);
+  const [userData, setUserData] = useState<AtlasUserData>(loadAtlasData);
+  const [userDataReady, setUserDataReady] = useState(!isDesktop());
   const [accounts, setAccounts] = useState<SteamAccount[]>([]);
   const [library, setLibrary] = useState<Game[]>([]);
   const [manifests, setManifests] = useState<ManifestEntry[]>(() =>
@@ -164,15 +192,21 @@ function App() {
   const [tools, setTools] = useState<ExternalTool[]>(() =>
     loadJson("atlas.tools", [])
   );
-  const [settings, setSettings] = useState<AppSettings>(() => ({
-    ...defaultSettings,
-    ...loadJson<Partial<AppSettings>>("atlas.settings", {})
-  }));
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const stored = loadJson<Partial<AppSettings>>("atlas.settings", {});
+    return {
+      ...defaultSettings,
+      ...stored,
+      dashboardWidgets: normalizeDashboardWidgets(stored.dashboardWidgets)
+    };
+  });
   const [showToolModal, setShowToolModal] = useState(false);
+  const [pendingToolLaunch, setPendingToolLaunch] = useState<ExternalTool | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [platform, setPlatform] = useState<PlatformInfo | null>(null);
+  const [onboardingOpen, setOnboardingOpen] = useState(!settings.onboardingComplete);
 
   useEffect(() => {
     if (!isDesktop()) return;
@@ -227,7 +261,8 @@ function App() {
     root.style.setProperty("--topbar-opacity", String(settings.topbarOpacity / 100));
     root.style.setProperty("--radius", `${settings.cornerRadius}px`);
     root.style.setProperty("--glow-intensity", String(settings.glowIntensity / 100));
-    root.style.setProperty("--ui-scale", String(settings.uiScale / 100));
+    const deckMode = settings.deckMode || Boolean(platform?.steamDeck);
+    root.style.setProperty("--ui-scale", String(Math.max(settings.uiScale, deckMode ? 108 : 85) / 100));
     root.dataset.backgroundPreset = settings.backgroundPreset;
     root.dataset.density = settings.density;
     const systemLight = window.matchMedia("(prefers-color-scheme: light)").matches;
@@ -237,9 +272,11 @@ function App() {
     root.dataset.theme = resolvedTheme;
     root.dataset.oled = String(settings.oledMode && resolvedTheme === "dark");
     root.dataset.reduceMotion = String(settings.reduceMotion);
+    root.dataset.highContrast = String(settings.highContrast);
+    root.dataset.deckMode = String(deckMode);
     const { steamApiKey: _steamApiKey, steamLadderApiKey: _steamLadderApiKey, ...safeSettings } = settings;
     localStorage.setItem("atlas.settings", JSON.stringify(safeSettings));
-  }, [settings]);
+  }, [settings, platform?.steamDeck]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -260,6 +297,30 @@ function App() {
   useEffect(() => {
     localStorage.setItem("atlas.manifests", JSON.stringify(manifests));
   }, [manifests]);
+
+  useEffect(() => {
+    if (!isDesktop()) return;
+    void bridge.loadUserData()
+      .then((json) => {
+        if (json) setUserData(parseAtlasData(json));
+      })
+      .catch((error) => notify(error instanceof Error ? error.message : "Atlas could not load workspace data."))
+      .finally(() => setUserDataReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (!userDataReady) return;
+    if (isDesktop()) {
+      void bridge.saveUserData(serializeAtlasData(userData))
+        .catch((error) => notify(error instanceof Error ? error.message : "Atlas could not save workspace data."));
+      return;
+    }
+    try {
+      saveAtlasData(userData);
+    } catch {
+      notify("Atlas could not save personal workspace data. Check available disk space.");
+    }
+  }, [userData, userDataReady]);
 
   useEffect(() => {
     if (!toast) return;
@@ -400,7 +461,7 @@ function App() {
     }
   };
 
-  const launchTool = async (tool: ExternalTool) => {
+  const performToolLaunch = async (tool: ExternalTool) => {
     if (!isDesktop()) {
       notify("Executable launching is enabled in the compiled desktop app.");
       return;
@@ -417,6 +478,14 @@ function App() {
     } catch (error) {
       notify(error instanceof Error ? error.message : "The tool did not launch.");
     }
+  };
+
+  const launchTool = async (tool: ExternalTool) => {
+    if (!tool.trustedAt) {
+      setPendingToolLaunch(tool);
+      return;
+    }
+    await performToolLaunch(tool);
   };
 
   const addManualTool = (tool: Omit<ExternalTool, "id" | "favorite">) => {
@@ -446,6 +515,7 @@ function App() {
 
   return (
     <div className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+      <a className="skip-link" href="#atlas-content">Skip to main content</a>
       <aside className="sidebar">
         <button
           className="brand"
@@ -506,7 +576,7 @@ function App() {
         </button>
       </aside>
 
-      <main className="main">
+      <main className="main" id="atlas-content">
         <header className="topbar">
           <div className="breadcrumb">
             <span>Atlas</span>
@@ -557,6 +627,7 @@ function App() {
               onNavigate={setPage}
               onGame={setSelectedGame}
               syncLocal={syncLocal}
+              widgets={settings.dashboardWidgets}
             />
           )}
           {page === "discover" && (
@@ -572,8 +643,13 @@ function App() {
           {page === "library" && (
             <Library
               games={library}
+              workspaces={userData.workspaces}
               onScan={syncLocal}
               onGame={setSelectedGame}
+              onWorkspace={setWorkspaceGame}
+              onWorkspaceUpdate={(appId, update) =>
+                setUserData((current) => withWorkspace(current, appId, update))
+              }
               onLink={openLink}
             />
           )}
@@ -636,9 +712,12 @@ function App() {
             <SettingsPage
               settings={settings}
               setSettings={setSettings}
+              userData={userData}
+              setUserData={setUserData}
               notify={notify}
               onLink={openLink}
               platform={platform}
+              onOpenOnboarding={() => setOnboardingOpen(true)}
             />
           )}
         </div>
@@ -648,7 +727,50 @@ function App() {
         <GameDrawer
           game={selectedGame}
           onClose={() => setSelectedGame(null)}
+          onWorkspace={() => {
+            setWorkspaceGame(selectedGame);
+            setSelectedGame(null);
+          }}
           onLink={openLink}
+        />
+      )}
+      {workspaceGame && (
+        <GameWorkspace
+          game={workspaceGame}
+          tools={tools}
+          accounts={accounts}
+          workspace={userData.workspaces[String(workspaceGame.appid)] ?? {
+            appId: String(workspaceGame.appid),
+            favorite: false,
+            status: "Backlog",
+            rating: 0,
+            notes: "",
+            tags: [],
+            compatibilityNotes: "",
+            preferredProtonVersion: "",
+            saveLocations: [],
+            configLocations: [],
+            launchProfiles: [],
+            backups: [],
+            backupRetentionCount: 10,
+            screenshotFavorites: [],
+            screenshotTags: {},
+            customArtwork: {},
+            artworkInstalls: [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }}
+          platform={platform}
+          sessions={userData.sessions.filter((session) => session.appId === String(workspaceGame.appid))}
+          onUpdate={(update) =>
+            setUserData((current) => withWorkspace(current, String(workspaceGame.appid), update))
+          }
+          onSession={(session) =>
+            setUserData((current) => ({ ...current, sessions: [session, ...current.sessions].slice(0, 2_000) }))
+          }
+          onClose={() => setWorkspaceGame(null)}
+          onLink={openLink}
+          notify={notify}
         />
       )}
       {showToolModal && (
@@ -658,8 +780,22 @@ function App() {
           accent={settings.accent}
         />
       )}
+      {pendingToolLaunch && (
+        <ConfirmToolLaunch
+          tool={pendingToolLaunch}
+          onCancel={() => setPendingToolLaunch(null)}
+          onConfirm={() => {
+            const trusted = { ...pendingToolLaunch, trustedAt: new Date().toISOString() };
+            setTools((current) => current.map((tool) => tool.id === trusted.id ? trusted : tool));
+            setPendingToolLaunch(null);
+            void performToolLaunch(trusted);
+          }}
+        />
+      )}
       {paletteOpen && (
         <CommandPalette
+          games={library}
+          workspaces={userData.workspaces}
           onClose={() => setPaletteOpen(false)}
           onNavigate={(target) => {
             setPage(target);
@@ -673,10 +809,26 @@ function App() {
             setPaletteOpen(false);
             void importManifests();
           }}
+          onGame={(game) => {
+            setWorkspaceGame(game);
+            setPaletteOpen(false);
+          }}
+        />
+      )}
+      {onboardingOpen && (
+        <Onboarding
+          platform={platform}
+          currentTheme={settings.theme}
+          onScan={syncLocal}
+          onComplete={(theme) => {
+            setSettings((current) => ({ ...current, theme, onboardingComplete: true }));
+            setOnboardingOpen(false);
+            notify("Steam Atlas setup complete.");
+          }}
         />
       )}
       {toast && (
-        <div className="toast">
+        <div className="toast" role="status" aria-live="polite">
           <Check size={17} />
           <span>{toast}</span>
         </div>
@@ -715,7 +867,8 @@ function Overview({
   manifests,
   onNavigate,
   onGame,
-  syncLocal
+  syncLocal,
+  widgets
 }: {
   accounts: number;
   games: number;
@@ -724,7 +877,9 @@ function Overview({
   onNavigate: (page: Page) => void;
   onGame: (game: Game) => void;
   syncLocal: () => void;
+  widgets: DashboardWidget[];
 }) {
+  const visible = new Set(widgets);
   return (
     <div className="page overview-page">
       <section className="hero">
@@ -767,7 +922,7 @@ function Overview({
         </div>
       </section>
 
-      <section className="stat-grid">
+      {visible.has("stats") && <section className="stat-grid">
         <StatCard
           icon={<LibraryBig />}
           label="Installed games"
@@ -796,9 +951,9 @@ function Overview({
           detail="Inspected local records"
           accent="green"
         />
-      </section>
+      </section>}
 
-      <div className="section-heading">
+      {visible.has("discovery") && <><div className="section-heading">
         <div>
           <span className="eyebrow">DISCOVERY SIGNAL</span>
           <h2>Worth a closer look</h2>
@@ -812,9 +967,10 @@ function Overview({
           <GameCard key={game.appid} game={game} onClick={() => onGame(game)} />
         ))}
       </div>
+      </>}
 
-      <div className="dashboard-columns">
-        <section className="panel">
+      {(visible.has("quickActions") || visible.has("systemStatus")) && <div className="dashboard-columns">
+        {visible.has("quickActions") && <section className="panel">
           <div className="panel-heading">
             <div>
               <span className="eyebrow">QUICK ACTIONS</span>
@@ -842,8 +998,8 @@ function Overview({
               onClick={() => onNavigate("accounts")}
             />
           </div>
-        </section>
-        <section className="panel system-panel">
+        </section>}
+        {visible.has("systemStatus") && <section className="panel system-panel">
           <div className="panel-heading">
             <div>
               <span className="eyebrow">SYSTEM STATUS</span>
@@ -883,8 +1039,8 @@ function Overview({
               <em>Optional</em>
             </li>
           </ul>
-        </section>
-      </div>
+        </section>}
+      </div>}
     </div>
   );
 }
@@ -1080,19 +1236,38 @@ function GameCard({ game, onClick }: { game: Game; onClick: () => void }) {
 
 function Library({
   games,
+  workspaces,
   onScan,
   onGame,
+  onWorkspace,
+  onWorkspaceUpdate,
   onLink
 }: {
   games: Game[];
+  workspaces: Record<string, GameWorkspaceData>;
   onScan: () => void;
   onGame: (game: Game) => void;
+  onWorkspace: (game: Game) => void;
+  onWorkspaceUpdate: (appId: string, update: (workspace: GameWorkspaceData) => GameWorkspaceData) => void;
   onLink: (url: string) => void;
 }) {
   const [libraryQuery, setLibraryQuery] = useState("");
-  const shown = games.filter((game) =>
-    game.name.toLowerCase().includes(libraryQuery.toLowerCase())
-  );
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [sort, setSort] = useState("name");
+  const shown = [...games]
+    .filter((game) => {
+      const workspace = workspaces[String(game.appid)];
+      const search = `${game.name} ${game.tags.join(" ")} ${workspace?.tags.join(" ") || ""}`.toLowerCase();
+      return search.includes(libraryQuery.toLowerCase())
+        && (statusFilter === "All" || workspace?.status === statusFilter)
+        && (!favoriteOnly || workspace?.favorite);
+    })
+    .sort((left, right) => {
+      if (sort === "size") return (right.sizeOnDisk || 0) - (left.sizeOnDisk || 0);
+      if (sort === "rating") return (workspaces[String(right.appid)]?.rating || 0) - (workspaces[String(left.appid)]?.rating || 0);
+      return left.name.localeCompare(right.name);
+    });
   const totalSize = games.reduce(
     (sum, game) => sum + (game.sizeOnDisk ?? 0),
     0
@@ -1133,6 +1308,29 @@ function Library({
             placeholder="Filter installed games"
           />
         </label>
+        <div className="library-filter-select">
+          <DarkSelect
+            value={statusFilter}
+            ariaLabel="Filter by backlog status"
+            options={["All", "Backlog", "Next", "Playing", "Finished", "Dropped", "Replay"].map((value) => ({ value, label: value === "All" ? "All statuses" : value }))}
+            onChange={setStatusFilter}
+          />
+        </div>
+        <div className="library-filter-select">
+          <DarkSelect
+            value={sort}
+            ariaLabel="Sort library"
+            options={[
+              { value: "name", label: "Sort: Name" },
+              { value: "size", label: "Sort: Largest" },
+              { value: "rating", label: "Sort: My rating" }
+            ]}
+            onChange={setSort}
+          />
+        </div>
+        <button className={`secondary-button ${favoriteOnly ? "active" : ""}`} onClick={() => setFavoriteOnly((value) => !value)} aria-pressed={favoriteOnly}>
+          <Heart size={16} fill={favoriteOnly ? "currentColor" : "none"} /> Favorites
+        </button>
         <button
           className="secondary-button"
           onClick={() => onLink("steam://open/games")}
@@ -1150,16 +1348,25 @@ function Library({
             <span />
           </div>
           {shown.map((game) => (
-            <button
+            <div
               className="library-row"
               key={game.appid}
+              role="button"
+              tabIndex={0}
               onClick={() => onGame(game)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") onGame(game);
+              }}
             >
               <span className="library-game">
                 <GameImage game={game} alt={`${game.name} artwork`} />
                 <span>
                   <strong>{game.name}</strong>
-                  <small>AppID {game.appid}</small>
+                  <small>
+                    AppID {game.appid}
+                    {workspaces[String(game.appid)]?.status ? ` · ${workspaces[String(game.appid)].status}` : ""}
+                    {workspaces[String(game.appid)]?.rating ? ` · ${workspaces[String(game.appid)].rating.toFixed(1)}/10` : ""}
+                  </small>
                 </span>
               </span>
               <span>
@@ -1168,9 +1375,20 @@ function Library({
               <span>{formatBytes(game.sizeOnDisk)}</span>
               <span>{game.lastUpdated ?? "Unknown"}</span>
               <span>
-                <MoreHorizontal size={18} />
+                <button
+                  className={`mini-icon ${workspaces[String(game.appid)]?.favorite ? "active" : ""}`}
+                  title={workspaces[String(game.appid)]?.favorite ? "Remove favorite" : "Add favorite"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const current = workspaces[String(game.appid)] ?? {
+                      appId: String(game.appid), favorite: false, status: "Backlog", rating: 0, notes: "", tags: [], compatibilityNotes: "", preferredProtonVersion: "", saveLocations: [], configLocations: [], launchProfiles: [], backups: [], backupRetentionCount: 10, screenshotFavorites: [], screenshotTags: {}, customArtwork: {}, artworkInstalls: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+                    };
+                    onWorkspaceUpdate(String(game.appid), (workspace) => ({ ...workspace, favorite: !current.favorite }));
+                  }}
+                ><Heart size={16} fill={workspaces[String(game.appid)]?.favorite ? "currentColor" : "none"} /></button>
+                <button className="text-button" onClick={(event) => { event.stopPropagation(); onWorkspace(game); }}>Workspace <ArrowRight size={14} /></button>
               </span>
-            </button>
+            </div>
           ))}
         </div>
       ) : (
@@ -1758,7 +1976,7 @@ function ToolsHub({
                 <code>{tool.path}</code>
               </div>
               <div className="tool-meta">
-                <span>{tool.category}</span>
+                <span>{tool.category} · {tool.trustedAt ? "Trusted" : "Review required"}</span>
                 <small>
                   {tool.lastLaunched
                     ? `Last run ${new Date(tool.lastLaunched).toLocaleDateString()}`
@@ -1809,20 +2027,29 @@ function ToolsHub({
 function SettingsPage({
   settings,
   setSettings,
+  userData,
+  setUserData,
   notify,
   onLink,
-  platform
+  platform,
+  onOpenOnboarding
 }: {
   settings: AppSettings;
   setSettings: (settings: AppSettings) => void;
+  userData: AtlasUserData;
+  setUserData: (data: AtlasUserData) => void;
   notify: (message: string) => void;
   onLink: (url: string) => void;
   platform: PlatformInfo | null;
+  onOpenOnboarding: () => void;
 }) {
   const [draft, setDraft] = useState<AppSettings>({
     ...defaultSettings,
     ...settings
   });
+  const [pendingPersonalImport, setPendingPersonalImport] = useState<AtlasUserData | null>(null);
+  const [securityInfo, setSecurityInfo] = useState<AppSecurityInfo | null>(null);
+  const [securityBusy, setSecurityBusy] = useState(false);
 
   const save = async () => {
     try {
@@ -1885,13 +2112,56 @@ function SettingsPage({
         ...draft,
         ...imported,
         steamApiKey: draft.steamApiKey,
-        steamLadderApiKey: draft.steamLadderApiKey
+        steamLadderApiKey: draft.steamLadderApiKey,
+        dashboardWidgets: normalizeDashboardWidgets(imported.dashboardWidgets)
       };
       setDraft(next);
       setSettings(next);
       notify("Portable appearance and region settings imported.");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Import failed.");
+    }
+  };
+
+  const exportPersonalData = async () => {
+    if (!isDesktop()) {
+      notify("Personal-data export is available in the desktop build.");
+      return;
+    }
+    try {
+      const path = await bridge.exportUserData(serializeAtlasData(userData));
+      if (path) notify(`Personal workspace data exported to ${path}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Personal-data export failed.");
+    }
+  };
+
+  const previewPersonalImport = async () => {
+    if (!isDesktop()) {
+      notify("Personal-data import is available in the desktop build.");
+      return;
+    }
+    try {
+      const json = await bridge.importUserData();
+      if (json) setPendingPersonalImport(parseAtlasData(json));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Personal-data import failed.");
+    }
+  };
+
+  const inspectBuildSecurity = async () => {
+    if (!isDesktop()) {
+      notify("Executable evidence is available in the desktop build.");
+      return;
+    }
+    setSecurityBusy(true);
+    try {
+      setSecurityInfo(await bridge.appSecurityInfo());
+      notify("Local executable hash and capability inventory loaded.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not inspect this build.");
+    } finally {
+      setSecurityBusy(false);
     }
   };
 
@@ -1966,6 +2236,34 @@ function SettingsPage({
               placeholder="Optional — enables rank data"
             />
           </label>
+        </section>
+
+        <section className="settings-section panel">
+          <div className="settings-heading">
+            <span><CircleGauge size={20} /></span>
+            <div><h3>Dashboard layout</h3><p>Choose which overview modules appear after launch.</p></div>
+          </div>
+          <div className="appearance-options">
+            {([
+              ["stats", "Library statistics", "Games, storage, accounts and manifest totals"],
+              ["discovery", "Discovery signal", "A compact row of catalogue recommendations"],
+              ["quickActions", "Quick actions", "Shortcuts to manifests, tools and accounts"],
+              ["systemStatus", "Safety status", "Local access and credential-vault state"]
+            ] as Array<[DashboardWidget, string, string]>).map(([widget, title, detail]) => (
+              <SettingToggle
+                key={widget}
+                title={title}
+                detail={detail}
+                checked={draft.dashboardWidgets.includes(widget)}
+                onChange={(checked) => setDraft({
+                  ...draft,
+                  dashboardWidgets: checked
+                    ? [...new Set([...draft.dashboardWidgets, widget])]
+                    : draft.dashboardWidgets.filter((item) => item !== widget)
+                })}
+              />
+            ))}
+          </div>
         </section>
 
         <section className="settings-section panel">
@@ -2276,7 +2574,41 @@ function SettingsPage({
               checked={draft.reduceMotion}
               onChange={(reduceMotion) => setDraft({ ...draft, reduceMotion })}
             />
+            <SettingToggle
+              title="High contrast"
+              detail="Strengthen borders, focus indicators and text separation."
+              checked={draft.highContrast}
+              onChange={(highContrast) => setDraft({ ...draft, highContrast })}
+            />
+            <SettingToggle
+              title="Steam Deck / TV mode"
+              detail={platform?.steamDeck ? "Enabled automatically on this Steam Deck." : "Larger targets and controller-friendly focus spacing."}
+              checked={draft.deckMode || Boolean(platform?.steamDeck)}
+              onChange={(deckMode) => setDraft({ ...draft, deckMode })}
+            />
           </div>
+        </section>
+
+        <section className="settings-section panel">
+          <div className="settings-heading">
+            <span><RefreshCcw size={20} /></span>
+            <div><h3>Updates and setup</h3><p>Stable updates require cryptographic signing before activation.</p></div>
+          </div>
+          <div className="field">
+            <span>Update channel</span>
+            <DarkSelect
+              value={draft.updateChannel}
+              ariaLabel="Update channel"
+              onChange={(updateChannel) => setDraft({ ...draft, updateChannel: updateChannel as AppSettings["updateChannel"] })}
+              options={[
+                { value: "manual", label: "Manual", detail: "Recommended until signing is configured" },
+                { value: "stable", label: "Stable", detail: "Signed production releases only" },
+                { value: "beta", label: "Beta", detail: "Signed previews and stable releases" }
+              ]}
+            />
+          </div>
+          <div className="safe-note"><ShieldCheck size={17} /> Automatic installation remains disabled in development builds until a trusted updater public key is embedded. Atlas will never install an unsigned update.</div>
+          <button type="button" className="secondary-button" onClick={onOpenOnboarding}><Sparkles size={16} /> Run setup guide again</button>
         </section>
 
         <section className="settings-section panel privacy-panel">
@@ -2321,11 +2653,80 @@ function SettingsPage({
             >
               <CloudDownload size={16} /> Import settings
             </button>
+            <button type="button" className="secondary-button" onClick={exportPersonalData}>
+              <Archive size={16} /> Export personal data
+            </button>
+            <button type="button" className="secondary-button" onClick={previewPersonalImport}>
+              <CloudDownload size={16} /> Import personal data
+            </button>
           </div>
           <small className="privacy-note">
             Exports intentionally exclude API keys and your custom background path.
           </small>
+          {pendingPersonalImport && (
+            <div className="personal-import-review">
+              <div><ShieldCheck size={19} /><span><strong>Review personal-data import</strong><small>The current workspace database will be replaced only after confirmation.</small></span></div>
+              <dl><div><dt>Workspaces</dt><dd>{Object.keys(pendingPersonalImport.workspaces).length}</dd></div><div><dt>Sessions</dt><dd>{pendingPersonalImport.sessions.length}</dd></div><div><dt>Schema</dt><dd>Version {pendingPersonalImport.schemaVersion}</dd></div></dl>
+              <footer><button className="secondary-button" onClick={() => setPendingPersonalImport(null)}>Cancel</button><button className="primary-button" onClick={() => { setUserData(pendingPersonalImport); setPendingPersonalImport(null); notify("Personal workspace data imported and queued for atomic storage."); }}><Check size={15} /> Replace workspace data</button></footer>
+            </div>
+          )}
         </section>
+
+        <section className="settings-section panel security-evidence-panel">
+          <div className="settings-heading">
+            <span><BadgeCheck size={20} /></span>
+            <div><h3>Build and security evidence</h3><p>Inspect the exact executable running on this computer.</p></div>
+          </div>
+          <div className="portable-actions">
+            <button type="button" className="secondary-button" disabled={securityBusy} onClick={inspectBuildSecurity}><ShieldCheck size={16} /> {securityBusy ? "Hashing executable…" : "Inspect this build"}</button>
+            <button type="button" className="text-button" onClick={() => onLink("https://support.kaspersky.com/1870")}><ExternalLink size={14} /> Kaspersky false-positive submission</button>
+          </div>
+          {securityInfo ? <div className="security-evidence">
+            <dl><div><dt>Version</dt><dd>{securityInfo.version}</dd></div><div><dt>Build</dt><dd>{securityInfo.buildType}</dd></div><div><dt>Executable</dt><dd>{securityInfo.executablePath}</dd></div><div><dt>SHA-256</dt><dd><code>{securityInfo.executableSha256}</code></dd></div></dl>
+            <div><article><h4>Enabled capabilities</h4><ul>{securityInfo.capabilities.map((item) => <li key={item}><Check size={13} /> {item}</li>)}</ul></article><article><h4>Local read scope</h4><ul>{securityInfo.readScopes.map((item) => <li key={item}><FolderOpen size={13} /> {item}</li>)}</ul></article><article><h4>Network destinations</h4><ul>{securityInfo.networkDomains.map((item) => <li key={item}><Globe2 size={13} /> {item}</li>)}</ul></article></div>
+            <small>API-key values are never returned by this inspection command. Compare the hash with the GitHub release checksum before trusting a downloaded binary.</small>
+          </div> : <div className="safe-note"><ShieldCheck size={17} /> No executable information is collected remotely. Hashing happens locally only when you press Inspect.</div>}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function Onboarding({
+  platform,
+  currentTheme,
+  onScan,
+  onComplete
+}: {
+  platform: PlatformInfo | null;
+  currentTheme: AppSettings["theme"];
+  onScan: () => void;
+  onComplete: (theme: AppSettings["theme"]) => void;
+}) {
+  const [step, setStep] = useState(0);
+  const [theme, setTheme] = useState<AppSettings["theme"]>(currentTheme);
+  const [scanRequested, setScanRequested] = useState(false);
+  const steps = ["Welcome", "Local access", "Appearance", "Ready"];
+  return (
+    <div className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <div className="onboarding-card">
+        <header>
+          <span className="onboarding-logo"><AtlasLogo /></span>
+          <div><strong>STEAM ATLAS</strong><small>1.0 SETUP</small></div>
+          <ol aria-label="Setup progress">{steps.map((label, index) => <li key={label} className={index === step ? "active" : index < step ? "complete" : ""}><span>{index < step ? <Check size={12} /> : index + 1}</span><em>{label}</em></li>)}</ol>
+        </header>
+
+        <main>
+          {step === 0 && <div className="onboarding-page"><span className="onboarding-icon"><Sparkles /></span><p className="eyebrow">WELCOME TO THE ATLAS</p><h1 id="onboarding-title">One deliberate workspace for every game you own.</h1><p>Steam Atlas organizes local libraries, saves, configurations, screenshots and trusted utilities without creating a remote Atlas account.</p><div className="onboarding-principles"><article><ShieldCheck /><strong>Local first</strong><span>Personal workspace data stays on this device unless you export it.</span></article><article><KeyRound /><strong>No Steam credentials</strong><span>Passwords and Steam Guard secrets never belong in Atlas.</span></article><article><PackageCheck /><strong>Ownership respected</strong><span>Steam remains authoritative for licenses and downloads.</span></article></div></div>}
+
+          {step === 1 && <div className="onboarding-page"><span className="onboarding-icon"><HardDrive /></span><p className="eyebrow">LOCAL ACCESS</p><h1 id="onboarding-title">You decide what Atlas can touch.</h1><p>Atlas detects Steam library metadata, accounts, artwork and screenshots. Save/config folders and executables are registered only after you select them.</p><div className="onboarding-detection"><div><span>Operating system</span><strong>{platform ? `${platform.os} · ${platform.architecture}` : "Detecting…"}</strong></div><div><span>Steam installations</span><strong>{platform ? String(platform.steamRoots.length) : "—"}</strong></div><div><span>Secure credentials</span><strong>{platform?.secureStorage || "Detecting…"}</strong></div><div><span>Steam Deck</span><strong>{platform?.steamDeck ? "Detected" : "Not detected"}</strong></div></div><button className="secondary-button" onClick={() => { setScanRequested(true); onScan(); }}><RefreshCcw size={16} /> {scanRequested ? "Scan requested" : "Scan accounts and libraries now"}</button><div className="safe-note"><ShieldCheck size={17} /> Scanning is read-only. Atlas does not modify Steam files during onboarding.</div></div>}
+
+          {step === 2 && <div className="onboarding-page"><span className="onboarding-icon"><Layers3 /></span><p className="eyebrow">APPEARANCE</p><h1 id="onboarding-title">Choose the starting atmosphere.</h1><p>You can adjust every visual control later, including OLED black, opacity, backgrounds, density, scale, reduced motion and high contrast.</p><div className="onboarding-themes">{(["system", "dark", "light"] as const).map((value) => <button key={value} className={theme === value ? "active" : ""} onClick={() => setTheme(value)}><span className={`theme-preview ${value}`}><i /><i /><i /></span><strong>{value === "system" ? "Follow system" : value === "dark" ? "Atlas dark" : "Atlas light"}</strong><small>{value === "system" ? "Matches Windows or Linux" : value === "dark" ? "Focused and cinematic" : "Bright and high clarity"}</small></button>)}</div></div>}
+
+          {step === 3 && <div className="onboarding-page"><span className="onboarding-icon success"><Check /></span><p className="eyebrow">READY</p><h1 id="onboarding-title">The foundation is configured.</h1><p>Start with a local library scan, open a game workspace, and register only the save or configuration folders you recognize.</p><div className="onboarding-summary"><article><CheckCircle2 /><span><strong>Private workspace</strong><small>Versioned and stored locally</small></span></article><article><CheckCircle2 /><span><strong>Safe restore flow</strong><small>Recovery snapshot before writing</small></span></article><article><CheckCircle2 /><span><strong>Validated launching</strong><small>No unrestricted shell endpoint</small></span></article><article><CheckCircle2 /><span><strong>English interface</strong><small>Translation architecture deferred</small></span></article></div></div>}
+        </main>
+
+        <footer><button className="secondary-button" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>Back</button><span>{step + 1} of {steps.length}</span>{step < steps.length - 1 ? <button className="primary-button" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))}>Continue <ArrowRight size={15} /></button> : <button className="primary-button" onClick={() => onComplete(theme)}><Check size={15} /> Enter Steam Atlas</button>}</footer>
       </div>
     </div>
   );
@@ -2395,10 +2796,12 @@ function SettingToggle({
 function GameDrawer({
   game,
   onClose,
+  onWorkspace,
   onLink
 }: {
   game: Game;
   onClose: () => void;
+  onWorkspace: () => void;
   onLink: (url: string) => void;
 }) {
   return (
@@ -2458,8 +2861,11 @@ function GameDrawer({
             </div>
           </dl>
           <div className="drawer-actions">
+            <button className="primary-button" onClick={onWorkspace}>
+              Open workspace <ArrowRight size={16} />
+            </button>
             <button
-              className="primary-button"
+              className="secondary-button"
               onClick={() =>
                 onLink(`https://store.steampowered.com/app/${game.appid}`)
               }
@@ -2612,16 +3018,43 @@ function ToolModal({
   );
 }
 
+function ConfirmToolLaunch({
+  tool,
+  onCancel,
+  onConfirm
+}: {
+  tool: ExternalTool;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onMouseDown={onCancel}>
+      <div className="modal trust-modal" role="alertdialog" aria-modal="true" aria-labelledby="trust-tool-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-heading"><span><ShieldCheck size={22} /></span><div><p className="eyebrow">FIRST-LAUNCH REVIEW</p><h2 id="trust-tool-title">Trust {tool.name}?</h2><p>Atlas will remember this approval for the current tool entry. Re-adding the file requires another review.</p></div></div>
+        <dl className="trust-details"><div><dt>Executable or script</dt><dd><code>{tool.path}</code></dd></div><div><dt>Arguments</dt><dd>{tool.args.length ? tool.args.map((argument) => <code key={argument}>{argument}</code>) : <span>None</span>}</dd></div><div><dt>Working directory</dt><dd><code>{tool.workingDirectory || "Executable folder"}</code></dd></div></dl>
+        <div className="safe-note"><ShieldCheck size={17} /> Only approve files you selected and recognize. Atlas does not verify the publisher or safety of third-party software.</div>
+        <div className="modal-actions"><button className="secondary-button" onClick={onCancel}>Cancel</button><button className="primary-button" onClick={onConfirm}><Play size={15} /> Trust and launch</button></div>
+      </div>
+    </div>
+  );
+}
+
 function CommandPalette({
+  games,
+  workspaces,
   onClose,
   onNavigate,
   onScan,
-  onImport
+  onImport,
+  onGame
 }: {
+  games: Game[];
+  workspaces: Record<string, GameWorkspaceData>;
   onClose: () => void;
   onNavigate: (page: Page) => void;
   onScan: () => void;
   onImport: () => void;
+  onGame: (game: Game) => void;
 }) {
   const [filter, setFilter] = useState("");
   const commands = [
@@ -2645,10 +3078,27 @@ function CommandPalette({
       detail: "Manifest Vault",
       icon: FileArchive,
       action: onImport
-    }
+    },
+    ...games.map((game) => ({
+      id: `game-${game.appid}`,
+      label: game.name,
+      detail: `Game workspace · AppID ${game.appid}${workspaces[String(game.appid)]?.status ? ` · ${workspaces[String(game.appid)].status}` : ""}`,
+      icon: Gamepad2,
+      action: () => onGame(game)
+    }))
   ].filter((item) =>
     `${item.label} ${item.detail}`.toLowerCase().includes(filter.toLowerCase())
-  );
+  ).sort((left, right) => {
+    const leftGame = left.id.startsWith("game-");
+    const rightGame = right.id.startsWith("game-");
+    if (leftGame !== rightGame) return leftGame ? 1 : -1;
+    if (leftGame && rightGame) {
+      const leftFavorite = workspaces[left.id.slice(5)]?.favorite ? 1 : 0;
+      const rightFavorite = workspaces[right.id.slice(5)]?.favorite ? 1 : 0;
+      if (leftFavorite !== rightFavorite) return rightFavorite - leftFavorite;
+    }
+    return left.label.localeCompare(right.label);
+  }).slice(0, 18);
 
   return (
     <div className="modal-backdrop command-backdrop" onMouseDown={onClose}>

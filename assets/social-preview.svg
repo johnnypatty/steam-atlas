@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
-  <title id="title">Steam Atlas Beta 0.2</title>
+  <title id="title">Steam Atlas 1.0</title>
   <desc id="desc">Cross-platform, local-first Steam library intelligence for Windows and Linux.</desc>
   <defs>
     <radialGradient id="bg" cx="82%" cy="18%" r="85%"><stop stop-color="#183549"/><stop offset=".55" stop-color="#0a1018"/><stop offset="1" stop-color="#05070a"/></radialGradient>
@@ -16,5 +16,5 @@
   <text x="92" y="242" fill="#66e3ff" font-family="Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="7">LOCAL-FIRST · CROSS-PLATFORM</text>
   <text x="88" y="343" fill="#f3f8fc" font-family="Arial, sans-serif" font-size="82" font-weight="700">STEAM ATLAS</text>
   <text x="93" y="405" fill="#9ba9b8" font-family="Arial, sans-serif" font-size="27">Library intelligence and a safer command center</text>
-  <text x="93" y="490" fill="#dce8f0" font-family="Arial, sans-serif" font-size="21">Windows  ·  Linux  ·  Steam + Proton  ·  Beta 0.2</text>
+  <text x="93" y="490" fill="#dce8f0" font-family="Arial, sans-serif" font-size="21">Windows  ·  Linux  ·  Steam Deck  ·  Release Candidate</text>
 </svg>

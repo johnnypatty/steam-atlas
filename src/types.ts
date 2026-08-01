@@ -33,6 +33,8 @@ export interface Game {
   buildId?: string;
   sizeOnDisk?: number;
   lastUpdated?: string;
+  minimumRequirements?: string;
+  recommendedRequirements?: string;
 }
 
 export interface SteamAccount {
@@ -72,7 +74,10 @@ export interface ExternalTool {
   color: string;
   favorite: boolean;
   lastLaunched?: string;
+  trustedAt?: string;
 }
+
+export type DashboardWidget = "stats" | "discovery" | "quickActions" | "systemStatus";
 
 export interface AppSettings {
   steamApiKey: string;
@@ -98,7 +103,12 @@ export interface AppSettings {
   density: "compact" | "comfortable" | "spacious";
   oledMode: boolean;
   reduceMotion: boolean;
+  highContrast: boolean;
+  deckMode: boolean;
+  dashboardWidgets: DashboardWidget[];
   theme: "system" | "dark" | "light";
+  updateChannel: "stable" | "beta" | "manual";
+  onboardingComplete: boolean;
 }
 
 export interface PlatformInfo {
@@ -108,6 +118,21 @@ export interface PlatformInfo {
   flatpakSteam: boolean;
   secureStorage: string;
   packageFormats: string[];
+  steamDeck?: boolean;
+  desktopSession?: string;
+  gamescopeAvailable?: boolean;
+  mangoHudAvailable?: boolean;
+  protonRoots?: string[];
+}
+
+export interface AppSecurityInfo {
+  version: string;
+  executablePath: string;
+  executableSha256: string;
+  buildType: "debug" | "release";
+  capabilities: string[];
+  readScopes: string[];
+  networkDomains: string[];
 }
 
 export interface AccountProfile {
@@ -126,6 +151,129 @@ export interface BackupRecord {
   createdAt: string;
   fileCount: number;
   totalBytes: number;
+  integrity?: "verified-sha256" | "legacy-unverified";
+  appId?: string;
+  locationId?: string;
+  kind?: "save" | "config" | "recovery";
+}
+
+export type LibraryStatus =
+  | "Backlog"
+  | "Next"
+  | "Playing"
+  | "Finished"
+  | "Dropped"
+  | "Replay";
+
+export interface ManagedLocation {
+  id: string;
+  label: string;
+  path: string;
+  kind: "save" | "config";
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface GameLaunchProfile {
+  id: string;
+  name: string;
+  appId: string;
+  arguments: string[];
+  protonVersion?: string;
+  backupBeforeLaunch: boolean;
+  saveLocationIds: string[];
+  preLaunchToolIds: string[];
+  createdAt: string;
+  lastLaunchedAt?: string;
+}
+
+export interface GameSession {
+  id: string;
+  appId: string;
+  profileId?: string;
+  profileName: string;
+  launchedAt: string;
+}
+
+export interface GameWorkspaceData {
+  appId: string;
+  favorite: boolean;
+  status: LibraryStatus;
+  rating: number;
+  notes: string;
+  tags: string[];
+  compatibilityNotes: string;
+  preferredProtonVersion: string;
+  saveLocations: ManagedLocation[];
+  configLocations: ManagedLocation[];
+  launchProfiles: GameLaunchProfile[];
+  backups: BackupRecord[];
+  backupRetentionCount: number;
+  screenshotFavorites: string[];
+  screenshotTags: Record<string, string[]>;
+  customArtwork: Partial<Record<ArtworkKind, string>>;
+  artworkInstalls: ArtworkInstallRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ArtworkKind = "grid" | "portrait" | "hero" | "logo";
+
+export interface ArtworkInstallRecord {
+  id: string;
+  kind: ArtworkKind;
+  steamId: string;
+  targetPath: string;
+  backupPath?: string;
+  installedAt: string;
+}
+
+export interface ArtworkInstallResult {
+  targetPath: string;
+  backupPath?: string;
+}
+
+export interface ConfigDiffLine {
+  line: number;
+  before?: string;
+  after?: string;
+}
+
+export interface ConfigDiff {
+  beforePath: string;
+  afterPath: string;
+  beforeLines: number;
+  afterLines: number;
+  truncated: boolean;
+  changes: ConfigDiffLine[];
+}
+
+export interface AtlasUserData {
+  schemaVersion: number;
+  workspaces: Record<string, GameWorkspaceData>;
+  sessions: GameSession[];
+}
+
+export interface BackupPreview {
+  backupPath: string;
+  destinationPath: string;
+  fileCount: number;
+  totalBytes: number;
+  recoveryWillBeCreated: boolean;
+  integrity: "verified-sha256" | "legacy-unverified";
+}
+
+export interface BackupIntegrityResult {
+  status: "verified-sha256" | "legacy-unverified";
+  fileCount: number;
+  totalBytes: number;
+  checkedAt: string;
+}
+
+export interface RestoreResult {
+  restoredFileCount: number;
+  restoredBytes: number;
+  recoveryBackup: BackupRecord;
 }
 
 export interface ScreenshotRecord {
@@ -151,4 +299,19 @@ export interface CrashReport {
   summary: string;
   suggestions: string[];
   excerpt: string;
+}
+
+export interface SystemDiagnostics {
+  appVersion: string;
+  os: string;
+  architecture: string;
+  cpu: string;
+  memoryBytes?: number;
+  steamRoots: string[];
+  flatpakSteam: boolean;
+  steamDeck: boolean;
+  desktopSession: string;
+  secureStorage: string;
+  packageFormats: string[];
+  notes: string[];
 }

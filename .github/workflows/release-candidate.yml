@@ -1,0 +1,97 @@
+name: Build 1.0 release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Qualified release-candidate tag, for example v1.0.0-rc.1"
+        required: true
+        default: "v1.0.0-rc.1"
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+
+jobs:
+  validate-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a 1.0 release-candidate tag
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v1\.0\.0-rc\.[0-9]+$ ]]; then
+            echo "Expected v1.0.0-rc.N" >&2
+            exit 1
+          fi
+
+  build:
+    needs: validate-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: "--bundles nsis"
+          - platform: ubuntu-24.04
+            args: "--bundles appimage,deb"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm run check
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "Steam Atlas 1.0 Release Candidate"
+          releaseBody: "Draft release candidate. Do not publish until Windows, Linux, Steam Deck, migration, signing and checksum review in docs/RELEASE_CHECKLIST.md are complete."
+          releaseDraft: true
+          prerelease: true
+          args: ${{ matrix.args }}
+
+  evidence:
+    name: Checksums and software inventories
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Generate software inventories
+        run: |
+          npm sbom --sbom-format cyclonedx > steam-atlas-npm.cdx.json
+          cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 > steam-atlas-cargo-metadata.json
+      - name: Download draft assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > ../CHECKSUMS-SHA256.txt
+      - name: Attach evidence and keep release as draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$RELEASE_TAG" CHECKSUMS-SHA256.txt steam-atlas-npm.cdx.json steam-atlas-cargo-metadata.json --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=true --prerelease --title "Steam Atlas 1.0 Release Candidate"
