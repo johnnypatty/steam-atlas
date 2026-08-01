@@ -1,4 +1,4 @@
-name: Draft prerelease
+name: Publish prerelease
 
 on:
   workflow_dispatch:
@@ -7,12 +7,20 @@ on:
         description: "Release tag, for example v0.2.0-beta.1"
         required: true
         default: "v0.2.0-beta.1"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.event.inputs.release_tag || 'v0.2.0-beta.1' }}
+
 jobs:
   publish:
+    if: "${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'release: publish Steam Atlas Beta 0.2') }}"
     strategy:
       fail-fast: false
       matrix:
@@ -42,9 +50,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ inputs.release_tag }}
+          tagName: ${{ env.RELEASE_TAG }}
           releaseName: "Steam Atlas Beta 0.2"
-          releaseBody: "See CHANGELOG.md for features, security changes, platform support, and known beta limitations."
+          releaseBody: "Steam Atlas Beta 0.2 adds Windows and Linux support, OS-backed credential storage, the Atlas Node identity, expanded appearance controls, and hardened local/native boundaries. See CHANGELOG.md for the complete notes and known beta limitations. Binaries are unsigned beta software."
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.args }}
+
+  finalize:
+    name: Checksums and publish
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download draft assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
+      - name: Generate SHA-256 checksums
+        run: |
+          cd release-assets
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > ../CHECKSUMS-SHA256.txt
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$RELEASE_TAG" CHECKSUMS-SHA256.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --title "Steam Atlas Beta 0.2"
