@@ -78,6 +78,7 @@ import {
 } from "./storage";
 import type {
   AtlasUserData,
+  AppSecurityInfo,
   AppSettings,
   DashboardWidget,
   ExternalTool,
@@ -2047,6 +2048,8 @@ function SettingsPage({
     ...settings
   });
   const [pendingPersonalImport, setPendingPersonalImport] = useState<AtlasUserData | null>(null);
+  const [securityInfo, setSecurityInfo] = useState<AppSecurityInfo | null>(null);
+  const [securityBusy, setSecurityBusy] = useState(false);
 
   const save = async () => {
     try {
@@ -2143,6 +2146,22 @@ function SettingsPage({
       if (json) setPendingPersonalImport(parseAtlasData(json));
     } catch (error) {
       notify(error instanceof Error ? error.message : "Personal-data import failed.");
+    }
+  };
+
+  const inspectBuildSecurity = async () => {
+    if (!isDesktop()) {
+      notify("Executable evidence is available in the desktop build.");
+      return;
+    }
+    setSecurityBusy(true);
+    try {
+      setSecurityInfo(await bridge.appSecurityInfo());
+      notify("Local executable hash and capability inventory loaded.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not inspect this build.");
+    } finally {
+      setSecurityBusy(false);
     }
   };
 
@@ -2651,6 +2670,22 @@ function SettingsPage({
               <footer><button className="secondary-button" onClick={() => setPendingPersonalImport(null)}>Cancel</button><button className="primary-button" onClick={() => { setUserData(pendingPersonalImport); setPendingPersonalImport(null); notify("Personal workspace data imported and queued for atomic storage."); }}><Check size={15} /> Replace workspace data</button></footer>
             </div>
           )}
+        </section>
+
+        <section className="settings-section panel security-evidence-panel">
+          <div className="settings-heading">
+            <span><BadgeCheck size={20} /></span>
+            <div><h3>Build and security evidence</h3><p>Inspect the exact executable running on this computer.</p></div>
+          </div>
+          <div className="portable-actions">
+            <button type="button" className="secondary-button" disabled={securityBusy} onClick={inspectBuildSecurity}><ShieldCheck size={16} /> {securityBusy ? "Hashing executable…" : "Inspect this build"}</button>
+            <button type="button" className="text-button" onClick={() => onLink("https://support.kaspersky.com/1870")}><ExternalLink size={14} /> Kaspersky false-positive submission</button>
+          </div>
+          {securityInfo ? <div className="security-evidence">
+            <dl><div><dt>Version</dt><dd>{securityInfo.version}</dd></div><div><dt>Build</dt><dd>{securityInfo.buildType}</dd></div><div><dt>Executable</dt><dd>{securityInfo.executablePath}</dd></div><div><dt>SHA-256</dt><dd><code>{securityInfo.executableSha256}</code></dd></div></dl>
+            <div><article><h4>Enabled capabilities</h4><ul>{securityInfo.capabilities.map((item) => <li key={item}><Check size={13} /> {item}</li>)}</ul></article><article><h4>Local read scope</h4><ul>{securityInfo.readScopes.map((item) => <li key={item}><FolderOpen size={13} /> {item}</li>)}</ul></article><article><h4>Network destinations</h4><ul>{securityInfo.networkDomains.map((item) => <li key={item}><Globe2 size={13} /> {item}</li>)}</ul></article></div>
+            <small>API-key values are never returned by this inspection command. Compare the hash with the GitHub release checksum before trusting a downloaded binary.</small>
+          </div> : <div className="safe-note"><ShieldCheck size={17} /> No executable information is collected remotely. Hashing happens locally only when you press Inspect.</div>}
         </section>
       </div>
     </div>
