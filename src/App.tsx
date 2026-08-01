@@ -720,6 +720,7 @@ function App() {
         <GameWorkspace
           game={workspaceGame}
           tools={tools}
+          accounts={accounts}
           workspace={userData.workspaces[String(workspaceGame.appid)] ?? {
             appId: String(workspaceGame.appid),
             favorite: false,
@@ -736,6 +737,7 @@ function App() {
             screenshotFavorites: [],
             screenshotTags: {},
             customArtwork: {},
+            artworkInstalls: [],
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           }}
@@ -1356,7 +1358,7 @@ function Library({
                   onClick={(event) => {
                     event.stopPropagation();
                     const current = workspaces[String(game.appid)] ?? {
-                      appId: String(game.appid), favorite: false, status: "Backlog", rating: 0, notes: "", tags: [], compatibilityNotes: "", preferredProtonVersion: "", saveLocations: [], configLocations: [], launchProfiles: [], backups: [], screenshotFavorites: [], screenshotTags: {}, customArtwork: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+                      appId: String(game.appid), favorite: false, status: "Backlog", rating: 0, notes: "", tags: [], compatibilityNotes: "", preferredProtonVersion: "", saveLocations: [], configLocations: [], launchProfiles: [], backups: [], screenshotFavorites: [], screenshotTags: {}, customArtwork: {}, artworkInstalls: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
                     };
                     onWorkspaceUpdate(String(game.appid), (workspace) => ({ ...workspace, favorite: !current.favorite }));
                   }}
