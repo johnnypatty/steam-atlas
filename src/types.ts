@@ -72,6 +72,7 @@ export interface ExternalTool {
   color: string;
   favorite: boolean;
   lastLaunched?: string;
+  trustedAt?: string;
 }
 
 export interface AppSettings {
@@ -164,6 +165,7 @@ export interface GameLaunchProfile {
   protonVersion?: string;
   backupBeforeLaunch: boolean;
   saveLocationIds: string[];
+  preLaunchToolIds: string[];
   createdAt: string;
   lastLaunchedAt?: string;
 }
