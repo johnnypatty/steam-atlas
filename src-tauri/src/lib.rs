@@ -4,8 +4,9 @@ use regex::Regex;
 use scraper::{Html, Selector};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -20,6 +21,7 @@ const MAX_LOCAL_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_USER_DATA_BYTES: usize = 8 * 1024 * 1024;
 const SECRET_SERVICE: &str = "app.steamatlas.desktop";
+const BACKUP_MANIFEST_SUFFIX: &str = ".atlas-manifest.json";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +123,33 @@ struct BackupRecord {
     created_at: String,
     file_count: u64,
     total_bytes: u64,
+    integrity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupManifestFile {
+    path: String,
+    size: u64,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupManifest {
+    schema_version: u32,
+    created_at: String,
+    source_path: String,
+    files: Vec<BackupManifestFile>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupIntegrityResult {
+    status: String,
+    file_count: u64,
+    total_bytes: u64,
+    checked_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,6 +160,7 @@ struct BackupPreview {
     file_count: u64,
     total_bytes: u64,
     recovery_will_be_created: bool,
+    integrity: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1159,10 +1189,14 @@ fn choose_folder() -> Result<Option<String>, String> {
         .map(|path| path.to_string_lossy().to_string()))
 }
 
-fn copy_folder_recursive(source: &Path, destination: &Path) -> Result<(u64, u64), String> {
+fn copy_folder_recursive_inner(
+    source: &Path,
+    destination: &Path,
+    remaining: &mut usize,
+    total_bytes: &mut u64,
+) -> Result<u64, String> {
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     let mut file_count = 0_u64;
-    let mut total_bytes = 0_u64;
     for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let file_type = entry.file_type().map_err(|error| error.to_string())?;
@@ -1172,18 +1206,40 @@ fn copy_folder_recursive(source: &Path, destination: &Path) -> Result<(u64, u64)
             continue;
         }
         if file_type.is_dir() {
-            let (nested_count, nested_bytes) =
-                copy_folder_recursive(&source_path, &destination_path)?;
+            let nested_count = copy_folder_recursive_inner(
+                &source_path,
+                &destination_path,
+                remaining,
+                total_bytes,
+            )?;
             file_count += nested_count;
-            total_bytes += nested_bytes;
         } else if file_type.is_file() {
+            if *remaining == 0 {
+                return Err("The folder exceeds Atlas's 200,000-file safety limit.".to_string());
+            }
+            *remaining -= 1;
             let size = entry.metadata().map(|value| value.len()).unwrap_or(0);
+            *total_bytes = total_bytes.saturating_add(size);
+            if *total_bytes > 50 * 1024 * 1024 * 1024 {
+                return Err("The folder exceeds Atlas's 50 GiB backup safety limit.".to_string());
+            }
             fs::copy(&source_path, &destination_path)
                 .map_err(|error| format!("Could not back up {}: {error}", source_path.display()))?;
             file_count += 1;
-            total_bytes += size;
         }
     }
+    Ok(file_count)
+}
+
+fn copy_folder_recursive(source: &Path, destination: &Path) -> Result<(u64, u64), String> {
+    let mut remaining = 200_000_usize;
+    let mut total_bytes = 0_u64;
+    let file_count = copy_folder_recursive_inner(
+        source,
+        destination,
+        &mut remaining,
+        &mut total_bytes,
+    )?;
     Ok((file_count, total_bytes))
 }
 
@@ -1255,6 +1311,139 @@ fn unique_backup_destination(root: &Path, name: &str) -> PathBuf {
     root.join(format!("{name}-{timestamp}-overflow"))
 }
 
+fn backup_manifest_path(backup: &Path) -> Result<PathBuf, String> {
+    let file_name = backup
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The snapshot name is not valid UTF-8.".to_string())?;
+    Ok(backup.with_file_name(format!("{file_name}{BACKUP_MANIFEST_SUFFIX}")))
+}
+
+fn hash_file(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Could not open {} for verification: {error}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not verify {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn collect_manifest_files(
+    root: &Path,
+    current: &Path,
+    remaining: &mut usize,
+    output: &mut Vec<BackupManifestFile>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(current).map_err(|error| error.to_string())? {
+        if *remaining == 0 {
+            return Err("The snapshot exceeds Atlas's 200,000-file safety limit.".to_string());
+        }
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        if file_type.is_symlink() {
+            return Err("A symbolic link appeared inside the snapshot during verification.".to_string());
+        }
+        if file_type.is_dir() {
+            collect_manifest_files(root, &entry.path(), remaining, output)?;
+        } else if file_type.is_file() {
+            *remaining -= 1;
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "A snapshot file escaped its expected root.".to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let size = entry.metadata().map_err(|error| error.to_string())?.len();
+            output.push(BackupManifestFile {
+                path: relative,
+                size,
+                sha256: hash_file(&path)?,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn write_backup_manifest(backup: &Path, source_path: &str, created_at: &str) -> Result<(), String> {
+    let mut files = Vec::new();
+    let mut remaining = 200_000_usize;
+    collect_manifest_files(backup, backup, &mut remaining, &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    let manifest = BackupManifest {
+        schema_version: 1,
+        created_at: created_at.to_string(),
+        source_path: source_path.to_string(),
+        files,
+    };
+    let path = backup_manifest_path(backup)?;
+    let temporary = path.with_extension("json.tmp");
+    let encoded = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| format!("Could not encode the snapshot integrity manifest: {error}"))?;
+    fs::write(&temporary, encoded)
+        .map_err(|error| format!("Could not write the snapshot integrity manifest: {error}"))?;
+    fs::rename(&temporary, &path)
+        .map_err(|error| format!("Could not finalize the snapshot integrity manifest: {error}"))
+}
+
+fn verify_backup_path(backup: &Path) -> Result<BackupIntegrityResult, String> {
+    let manifest_path = backup_manifest_path(backup)?;
+    if !manifest_path.is_file() {
+        let mut remaining = 200_000_usize;
+        let (file_count, total_bytes) = inspect_folder_recursive(backup, &mut remaining)?;
+        return Ok(BackupIntegrityResult {
+            status: "legacy-unverified".to_string(),
+            file_count,
+            total_bytes,
+            checked_at: unix_timestamp().to_string(),
+        });
+    }
+    let encoded = fs::read(&manifest_path)
+        .map_err(|error| format!("Could not read the snapshot integrity manifest: {error}"))?;
+    if encoded.len() > 64 * 1024 * 1024 {
+        return Err("The snapshot integrity manifest is unexpectedly large.".to_string());
+    }
+    let manifest: BackupManifest = serde_json::from_slice(&encoded)
+        .map_err(|error| format!("The snapshot integrity manifest is invalid: {error}"))?;
+    if manifest.schema_version != 1 {
+        return Err("This snapshot uses an unsupported integrity-manifest version.".to_string());
+    }
+    let mut current = Vec::new();
+    let mut remaining = 200_000_usize;
+    collect_manifest_files(backup, backup, &mut remaining, &mut current)?;
+    let expected: HashMap<_, _> = manifest
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), (file.size, file.sha256.as_str())))
+        .collect();
+    if expected.len() != manifest.files.len() || current.len() != manifest.files.len() {
+        return Err("Snapshot verification failed: files were added, removed, or duplicated.".to_string());
+    }
+    let mut total_bytes = 0_u64;
+    for file in &current {
+        let Some((size, sha256)) = expected.get(file.path.as_str()) else {
+            return Err(format!("Snapshot verification failed: {} was not recorded.", file.path));
+        };
+        if *size != file.size || *sha256 != file.sha256 {
+            return Err(format!("Snapshot verification failed: {} has changed.", file.path));
+        }
+        total_bytes = total_bytes.saturating_add(file.size);
+    }
+    Ok(BackupIntegrityResult {
+        status: "verified-sha256".to_string(),
+        file_count: current.len() as u64,
+        total_bytes,
+        checked_at: unix_timestamp().to_string(),
+    })
+}
+
 fn validated_backup_path(app: &tauri::AppHandle, value: &str) -> Result<PathBuf, String> {
     let root = backup_root(app)?;
     let path = PathBuf::from(value);
@@ -1288,15 +1477,53 @@ fn backup_folder(app: tauri::AppHandle, source_path: String) -> Result<BackupRec
     inspect_folder_recursive(&canonical_source, &mut remaining)?;
     let safe_name = safe_folder_name(&source, "backup");
     let destination = unique_backup_destination(&root, &safe_name);
-    let (file_count, total_bytes) = copy_folder_recursive(&canonical_source, &destination)?;
+    let (file_count, total_bytes) = match copy_folder_recursive(&canonical_source, &destination) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&destination);
+            return Err(error);
+        }
+    };
+    let created_at = timestamp.to_string();
+    if let Err(error) = write_backup_manifest(&destination, &source_path, &created_at) {
+        let _ = fs::remove_dir_all(&destination);
+        return Err(error);
+    }
     Ok(BackupRecord {
         id: format!("backup-{timestamp}"),
         source_path,
         backup_path: destination.to_string_lossy().to_string(),
-        created_at: timestamp.to_string(),
+        created_at,
         file_count,
         total_bytes,
+        integrity: "verified-sha256".to_string(),
     })
+}
+
+#[tauri::command]
+fn verify_backup_integrity(
+    app: tauri::AppHandle,
+    backup_path: String,
+) -> Result<BackupIntegrityResult, String> {
+    let backup = validated_backup_path(&app, &backup_path)?;
+    verify_backup_path(&backup)
+}
+
+#[tauri::command]
+fn delete_backup_snapshot(app: tauri::AppHandle, backup_path: String) -> Result<(), String> {
+    let root = backup_root(&app)?;
+    let backup = validated_backup_path(&app, &backup_path)?;
+    if backup.parent() != Some(root.as_path()) {
+        return Err("Atlas only removes complete top-level snapshots from its vault.".to_string());
+    }
+    let manifest = backup_manifest_path(&backup)?;
+    fs::remove_dir_all(&backup)
+        .map_err(|error| format!("Could not remove the selected snapshot: {error}"))?;
+    if manifest.is_file() {
+        fs::remove_file(&manifest)
+            .map_err(|error| format!("The snapshot was removed, but its integrity record remains: {error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1319,12 +1546,14 @@ fn preview_backup_restore(
     }
     let mut remaining = 200_000_usize;
     let (file_count, total_bytes) = inspect_folder_recursive(&backup, &mut remaining)?;
+    let integrity = verify_backup_path(&backup)?.status;
     Ok(BackupPreview {
         backup_path: backup.to_string_lossy().to_string(),
         destination_path: destination.to_string_lossy().to_string(),
         file_count,
         total_bytes,
         recovery_will_be_created: true,
+        integrity,
     })
 }
 
@@ -1342,13 +1571,23 @@ fn restore_backup(
     let recovery_path = unique_backup_destination(&root, &recovery_name);
     let created_at = unix_timestamp();
     let (recovery_files, recovery_bytes) = copy_folder_recursive(&destination, &recovery_path)?;
+    let recovery_created_at = created_at.to_string();
+    if let Err(error) = write_backup_manifest(
+        &recovery_path,
+        &destination.to_string_lossy(),
+        &recovery_created_at,
+    ) {
+        let _ = fs::remove_dir_all(&recovery_path);
+        return Err(error);
+    }
     let recovery_backup = BackupRecord {
         id: format!("recovery-{created_at}"),
         source_path: destination.to_string_lossy().to_string(),
         backup_path: recovery_path.to_string_lossy().to_string(),
-        created_at: created_at.to_string(),
+        created_at: recovery_created_at,
         file_count: recovery_files,
         total_bytes: recovery_bytes,
+        integrity: "verified-sha256".to_string(),
     };
     let (restored_file_count, restored_bytes) = copy_folder_recursive(&backup, &destination)
         .map_err(|error| format!("Restore stopped after creating a recovery snapshot: {error}"))?;
@@ -2628,6 +2867,8 @@ pub fn run() {
             choose_background_image,
             choose_folder,
             backup_folder,
+            verify_backup_integrity,
+            delete_backup_snapshot,
             preview_backup_restore,
             restore_backup,
             launch_steam_game,
@@ -2737,5 +2978,28 @@ mod tests {
         assert!(text.contains("Minimum:"));
         assert!(text.contains("Windows 10 & 8 GB RAM"));
         assert!(!text.contains('<'));
+    }
+
+    #[test]
+    fn backup_integrity_manifest_detects_changed_files() {
+        let root = std::env::temp_dir().join(format!(
+            "steam-atlas-integrity-test-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        let backup = root.join("snapshot");
+        fs::create_dir_all(backup.join("nested")).unwrap();
+        fs::write(backup.join("save.dat"), b"original save").unwrap();
+        fs::write(backup.join("nested").join("config.ini"), b"quality=high").unwrap();
+
+        write_backup_manifest(&backup, "test-source", "1").unwrap();
+        let verified = verify_backup_path(&backup).unwrap();
+        assert_eq!(verified.status, "verified-sha256");
+        assert_eq!(verified.file_count, 2);
+
+        fs::write(backup.join("save.dat"), b"tampered save").unwrap();
+        assert!(verify_backup_path(&backup).is_err());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
