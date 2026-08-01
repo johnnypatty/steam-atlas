@@ -34,6 +34,7 @@ import type {
   GameLaunchProfile,
   GameSession,
   GameWorkspaceData,
+  ExternalTool,
   LibraryStatus,
   ManagedLocation,
   PlatformInfo,
@@ -72,6 +73,7 @@ const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() |
 
 export function GameWorkspace({
   game,
+  tools,
   workspace,
   platform,
   sessions,
@@ -82,6 +84,7 @@ export function GameWorkspace({
   notify
 }: {
   game: Game;
+  tools: ExternalTool[];
   workspace: GameWorkspaceData;
   platform: PlatformInfo | null;
   sessions: GameSession[];
@@ -225,6 +228,7 @@ export function GameWorkspace({
           {tab === "launch" && (
             <LaunchProfiles
               game={game}
+              tools={tools}
               profiles={workspace.launchProfiles}
               saveLocations={workspace.saveLocations}
               onProfiles={(launchProfiles) => onUpdate((current) => ({ ...current, launchProfiles }))}
@@ -453,6 +457,7 @@ function ConfigManager({
 
 function LaunchProfiles({
   game,
+  tools,
   profiles,
   saveLocations,
   onProfiles,
@@ -461,6 +466,7 @@ function LaunchProfiles({
   notify
 }: {
   game: Game;
+  tools: ExternalTool[];
   profiles: GameLaunchProfile[];
   saveLocations: ManagedLocation[];
   onProfiles: (profiles: GameLaunchProfile[]) => void;
@@ -472,7 +478,9 @@ function LaunchProfiles({
   const [argumentsText, setArgumentsText] = useState("");
   const [protonVersion, setProtonVersion] = useState("");
   const [backupBeforeLaunch, setBackupBeforeLaunch] = useState(false);
+  const [preLaunchToolIds, setPreLaunchToolIds] = useState<string[]>([]);
   const [busy, setBusy] = useState("");
+  const trustedTools = tools.filter((tool) => tool.trustedAt);
 
   const add = (event: FormEvent) => {
     event.preventDefault();
@@ -485,10 +493,11 @@ function LaunchProfiles({
       protonVersion: protonVersion.trim().slice(0, 120),
       backupBeforeLaunch,
       saveLocationIds: backupBeforeLaunch ? saveLocations.filter((item) => item.enabled).map((item) => item.id) : [],
+      preLaunchToolIds,
       createdAt: new Date().toISOString()
     };
     onProfiles([profile, ...profiles]);
-    setName(""); setArgumentsText(""); setProtonVersion(""); setBackupBeforeLaunch(false);
+    setName(""); setArgumentsText(""); setProtonVersion(""); setBackupBeforeLaunch(false); setPreLaunchToolIds([]);
   };
 
   const launch = async (profile: GameLaunchProfile) => {
@@ -500,6 +509,14 @@ function LaunchProfiles({
           const backup = await bridge.backupFolder(location.path);
           onBackup({ ...backup, appId: String(game.appid), locationId: location.id, kind: "save" });
         }
+      }
+      const selectedTools = profile.preLaunchToolIds.map((id) => tools.find((tool) => tool.id === id && tool.trustedAt));
+      if (selectedTools.some((tool) => !tool)) {
+        throw new Error("A pre-launch tool is missing or no longer trusted. Review this profile in Atlas.");
+      }
+      for (const tool of selectedTools) {
+        if (!tool) continue;
+        await bridge.launchTool(tool.path, tool.args, tool.workingDirectory);
       }
       await bridge.launchSteamGame(String(game.appid), profile.arguments);
       const launchedAt = new Date().toISOString();
@@ -522,6 +539,7 @@ function LaunchProfiles({
         <label><span>Proton version note</span><input value={protonVersion} maxLength={120} onChange={(event) => setProtonVersion(event.target.value)} placeholder="Optional, for example Proton Experimental" /></label>
         <label className="launch-arguments"><span>Launch arguments · one per line</span><textarea value={argumentsText} onChange={(event) => setArgumentsText(event.target.value)} placeholder={'-novid\n-windowed\n-w 1920'} /></label>
         <label className="check-row"><input type="checkbox" checked={backupBeforeLaunch} onChange={(event) => setBackupBeforeLaunch(event.target.checked)} /><span><strong>Back up registered save folders first</strong><small>{saveLocations.length ? `${saveLocations.length} available location(s)` : "Register a save folder before enabling this"}</small></span></label>
+        <div className="profile-tool-picker"><span>Trusted tools to launch first</span><div>{trustedTools.map((tool) => <label key={tool.id}><input type="checkbox" checked={preLaunchToolIds.includes(tool.id)} onChange={(event) => setPreLaunchToolIds((current) => event.target.checked ? [...current, tool.id].slice(0, 16) : current.filter((id) => id !== tool.id))} /><span><strong>{tool.name}</strong><small>{tool.category}</small></span></label>)}{!trustedTools.length && <small>Review and launch a selected utility once in Tools Hub to trust it for profiles.</small>}</div></div>
         <button className="primary-button" disabled={!name.trim() || (backupBeforeLaunch && !saveLocations.length)}><Plus size={16} /> Save profile</button>
       </form>
       <div className="launch-profile-grid">
@@ -529,7 +547,7 @@ function LaunchProfiles({
           <article key={profile.id}>
             <header><span>APP {profile.appId}</span>{profile.backupBeforeLaunch && <em><Save size={12} /> protected launch</em>}</header>
             <h3>{profile.name}</h3>
-            <p>{profile.protonVersion || "Default compatibility runtime"}</p>
+            <p>{profile.protonVersion || "Default compatibility runtime"}{profile.preLaunchToolIds.length ? ` · ${profile.preLaunchToolIds.length} pre-launch tool(s)` : ""}</p>
             <div className="argument-chips">{profile.arguments.map((argument, index) => <code key={`${argument}-${index}`}>{argument}</code>)}{!profile.arguments.length && <small>Default Steam arguments</small>}</div>
             <footer><button className="launch-button" disabled={busy === profile.id} onClick={() => launch(profile)}><Play size={15} /> {busy === profile.id ? "Preparing…" : "Launch"}</button><button className="mini-icon danger" aria-label={`Delete ${profile.name}`} onClick={() => onProfiles(profiles.filter((item) => item.id !== profile.id))}><Trash2 size={15} /></button></footer>
           </article>
