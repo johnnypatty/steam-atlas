@@ -4,6 +4,7 @@ import type {
   ArtworkInstallResult,
   BackupPreview,
   BackupRecord,
+  BackupIntegrityResult,
   ConfigDiff,
   CrashReport,
   Game,
@@ -98,6 +99,10 @@ export const bridge = {
   chooseFolder: () => desktopInvoke<string | null>("choose_folder"),
   backupFolder: (sourcePath: string) =>
     desktopInvoke<BackupRecord>("backup_folder", { sourcePath }),
+  verifyBackupIntegrity: (backupPath: string) =>
+    desktopInvoke<BackupIntegrityResult>("verify_backup_integrity", { backupPath }),
+  deleteBackupSnapshot: (backupPath: string) =>
+    desktopInvoke<void>("delete_backup_snapshot", { backupPath }),
   previewRestore: (backupPath: string, destinationPath: string) =>
     desktopInvoke<BackupPreview>("preview_backup_restore", {
       backupPath,
