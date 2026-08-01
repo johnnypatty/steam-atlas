@@ -79,6 +79,7 @@ import {
 import type {
   AtlasUserData,
   AppSettings,
+  DashboardWidget,
   ExternalTool,
   Game,
   GameWorkspaceData,
@@ -113,6 +114,8 @@ const defaultSettings: AppSettings = {
   oledMode: false,
   reduceMotion: false,
   highContrast: false,
+  deckMode: false,
+  dashboardWidgets: ["stats", "discovery", "quickActions", "systemStatus"],
   theme: "system",
   updateChannel: "manual",
   onboardingComplete: false
@@ -128,6 +131,13 @@ const navItems: { id: Page; label: string; icon: typeof Activity }[] = [
   { id: "power", label: "Power Suite", icon: Zap },
   { id: "settings", label: "Settings", icon: Settings }
 ];
+
+const dashboardWidgetOrder: DashboardWidget[] = ["stats", "discovery", "quickActions", "systemStatus"];
+
+const normalizeDashboardWidgets = (value: unknown): DashboardWidget[] =>
+  Array.isArray(value)
+    ? dashboardWidgetOrder.filter((widget) => value.includes(widget))
+    : [...dashboardWidgetOrder];
 
 const loadJson = <T,>(key: string, fallback: T): T => {
   try {
@@ -181,10 +191,14 @@ function App() {
   const [tools, setTools] = useState<ExternalTool[]>(() =>
     loadJson("atlas.tools", [])
   );
-  const [settings, setSettings] = useState<AppSettings>(() => ({
-    ...defaultSettings,
-    ...loadJson<Partial<AppSettings>>("atlas.settings", {})
-  }));
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const stored = loadJson<Partial<AppSettings>>("atlas.settings", {});
+    return {
+      ...defaultSettings,
+      ...stored,
+      dashboardWidgets: normalizeDashboardWidgets(stored.dashboardWidgets)
+    };
+  });
   const [showToolModal, setShowToolModal] = useState(false);
   const [pendingToolLaunch, setPendingToolLaunch] = useState<ExternalTool | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -246,7 +260,8 @@ function App() {
     root.style.setProperty("--topbar-opacity", String(settings.topbarOpacity / 100));
     root.style.setProperty("--radius", `${settings.cornerRadius}px`);
     root.style.setProperty("--glow-intensity", String(settings.glowIntensity / 100));
-    root.style.setProperty("--ui-scale", String(settings.uiScale / 100));
+    const deckMode = settings.deckMode || Boolean(platform?.steamDeck);
+    root.style.setProperty("--ui-scale", String(Math.max(settings.uiScale, deckMode ? 108 : 85) / 100));
     root.dataset.backgroundPreset = settings.backgroundPreset;
     root.dataset.density = settings.density;
     const systemLight = window.matchMedia("(prefers-color-scheme: light)").matches;
@@ -257,9 +272,10 @@ function App() {
     root.dataset.oled = String(settings.oledMode && resolvedTheme === "dark");
     root.dataset.reduceMotion = String(settings.reduceMotion);
     root.dataset.highContrast = String(settings.highContrast);
+    root.dataset.deckMode = String(deckMode);
     const { steamApiKey: _steamApiKey, steamLadderApiKey: _steamLadderApiKey, ...safeSettings } = settings;
     localStorage.setItem("atlas.settings", JSON.stringify(safeSettings));
-  }, [settings]);
+  }, [settings, platform?.steamDeck]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -610,6 +626,7 @@ function App() {
               onNavigate={setPage}
               onGame={setSelectedGame}
               syncLocal={syncLocal}
+              widgets={settings.dashboardWidgets}
             />
           )}
           {page === "discover" && (
@@ -734,6 +751,7 @@ function App() {
             configLocations: [],
             launchProfiles: [],
             backups: [],
+            backupRetentionCount: 10,
             screenshotFavorites: [],
             screenshotTags: {},
             customArtwork: {},
@@ -848,7 +866,8 @@ function Overview({
   manifests,
   onNavigate,
   onGame,
-  syncLocal
+  syncLocal,
+  widgets
 }: {
   accounts: number;
   games: number;
@@ -857,7 +876,9 @@ function Overview({
   onNavigate: (page: Page) => void;
   onGame: (game: Game) => void;
   syncLocal: () => void;
+  widgets: DashboardWidget[];
 }) {
+  const visible = new Set(widgets);
   return (
     <div className="page overview-page">
       <section className="hero">
@@ -900,7 +921,7 @@ function Overview({
         </div>
       </section>
 
-      <section className="stat-grid">
+      {visible.has("stats") && <section className="stat-grid">
         <StatCard
           icon={<LibraryBig />}
           label="Installed games"
@@ -929,9 +950,9 @@ function Overview({
           detail="Inspected local records"
           accent="green"
         />
-      </section>
+      </section>}
 
-      <div className="section-heading">
+      {visible.has("discovery") && <><div className="section-heading">
         <div>
           <span className="eyebrow">DISCOVERY SIGNAL</span>
           <h2>Worth a closer look</h2>
@@ -945,9 +966,10 @@ function Overview({
           <GameCard key={game.appid} game={game} onClick={() => onGame(game)} />
         ))}
       </div>
+      </>}
 
-      <div className="dashboard-columns">
-        <section className="panel">
+      {(visible.has("quickActions") || visible.has("systemStatus")) && <div className="dashboard-columns">
+        {visible.has("quickActions") && <section className="panel">
           <div className="panel-heading">
             <div>
               <span className="eyebrow">QUICK ACTIONS</span>
@@ -975,8 +997,8 @@ function Overview({
               onClick={() => onNavigate("accounts")}
             />
           </div>
-        </section>
-        <section className="panel system-panel">
+        </section>}
+        {visible.has("systemStatus") && <section className="panel system-panel">
           <div className="panel-heading">
             <div>
               <span className="eyebrow">SYSTEM STATUS</span>
@@ -1016,8 +1038,8 @@ function Overview({
               <em>Optional</em>
             </li>
           </ul>
-        </section>
-      </div>
+        </section>}
+      </div>}
     </div>
   );
 }
@@ -1358,7 +1380,7 @@ function Library({
                   onClick={(event) => {
                     event.stopPropagation();
                     const current = workspaces[String(game.appid)] ?? {
-                      appId: String(game.appid), favorite: false, status: "Backlog", rating: 0, notes: "", tags: [], compatibilityNotes: "", preferredProtonVersion: "", saveLocations: [], configLocations: [], launchProfiles: [], backups: [], screenshotFavorites: [], screenshotTags: {}, customArtwork: {}, artworkInstalls: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+                      appId: String(game.appid), favorite: false, status: "Backlog", rating: 0, notes: "", tags: [], compatibilityNotes: "", preferredProtonVersion: "", saveLocations: [], configLocations: [], launchProfiles: [], backups: [], backupRetentionCount: 10, screenshotFavorites: [], screenshotTags: {}, customArtwork: {}, artworkInstalls: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
                     };
                     onWorkspaceUpdate(String(game.appid), (workspace) => ({ ...workspace, favorite: !current.favorite }));
                   }}
@@ -2087,7 +2109,8 @@ function SettingsPage({
         ...draft,
         ...imported,
         steamApiKey: draft.steamApiKey,
-        steamLadderApiKey: draft.steamLadderApiKey
+        steamLadderApiKey: draft.steamLadderApiKey,
+        dashboardWidgets: normalizeDashboardWidgets(imported.dashboardWidgets)
       };
       setDraft(next);
       setSettings(next);
@@ -2194,6 +2217,34 @@ function SettingsPage({
               placeholder="Optional — enables rank data"
             />
           </label>
+        </section>
+
+        <section className="settings-section panel">
+          <div className="settings-heading">
+            <span><CircleGauge size={20} /></span>
+            <div><h3>Dashboard layout</h3><p>Choose which overview modules appear after launch.</p></div>
+          </div>
+          <div className="appearance-options">
+            {([
+              ["stats", "Library statistics", "Games, storage, accounts and manifest totals"],
+              ["discovery", "Discovery signal", "A compact row of catalogue recommendations"],
+              ["quickActions", "Quick actions", "Shortcuts to manifests, tools and accounts"],
+              ["systemStatus", "Safety status", "Local access and credential-vault state"]
+            ] as Array<[DashboardWidget, string, string]>).map(([widget, title, detail]) => (
+              <SettingToggle
+                key={widget}
+                title={title}
+                detail={detail}
+                checked={draft.dashboardWidgets.includes(widget)}
+                onChange={(checked) => setDraft({
+                  ...draft,
+                  dashboardWidgets: checked
+                    ? [...new Set([...draft.dashboardWidgets, widget])]
+                    : draft.dashboardWidgets.filter((item) => item !== widget)
+                })}
+              />
+            ))}
+          </div>
         </section>
 
         <section className="settings-section panel">
@@ -2509,6 +2560,12 @@ function SettingsPage({
               detail="Strengthen borders, focus indicators and text separation."
               checked={draft.highContrast}
               onChange={(highContrast) => setDraft({ ...draft, highContrast })}
+            />
+            <SettingToggle
+              title="Steam Deck / TV mode"
+              detail={platform?.steamDeck ? "Enabled automatically on this Steam Deck." : "Larger targets and controller-friendly focus spacing."}
+              checked={draft.deckMode || Boolean(platform?.steamDeck)}
+              onChange={(deckMode) => setDraft({ ...draft, deckMode })}
             />
           </div>
         </section>
