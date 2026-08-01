@@ -2,8 +2,8 @@
 
 ## Supported version
 
-Security fixes target the newest `0.2.x` beta. Older prereleases should be
-upgraded before a report is reproduced.
+Security fixes target the newest published release and the active 1.0 release
+candidate. Older prereleases should be upgraded before a report is reproduced.
 
 ## Trust boundary
 
@@ -11,7 +11,9 @@ Steam Atlas is local-first and has no Atlas account or cloud database. It may:
 
 - read Steam's local account display metadata, app manifests, artwork cache and
   recent screenshots after an explicit scan;
-- copy an explicitly selected folder into its application-data backup area;
+- copy an explicitly selected folder into its application-data backup area,
+  write/verify SHA-256 manifests and remove only explicitly confirmed,
+  top-level Atlas snapshots;
 - query a documented set of Steam, Steam Community and Steam Ladder HTTPS
   endpoints with bounded responses and timeouts;
 - open only allowlisted HTTPS destinations and `steam://open/games`;
@@ -26,7 +28,7 @@ accept generic shell command strings or launch programs silently.
 ## Protected credentials
 
 Optional API keys are stored in Windows Credential Manager or Linux Secret
-Service. Beta 0.2 migrates legacy keys from WebView storage and rewrites browser
+Service. Atlas migrates legacy keys from WebView storage and rewrites browser
 settings without those fields. Portable exports are defensively redacted in
 both the UI and Rust backend.
 
