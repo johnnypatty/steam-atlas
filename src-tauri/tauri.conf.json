@@ -26,7 +26,9 @@
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://store.steampowered.com https://api.steampowered.com https://steamcommunity.com https://steamladder.com; img-src 'self' asset: http://asset.localhost https://cdn.cloudflare.steamstatic.com https://avatars.cloudflare.steamstatic.com https://avatars.steamstatic.com https://avatars.fastly.steamstatic.com https://shared.fastly.steamstatic.com https://shared.akamai.steamstatic.com https://cdn.akamai.steamstatic.com https://steamcdn-a.akamaihd.net https://avatars.akamai.steamstatic.com data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:;",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**"]
+        "scope": [
+          "$APPDATA/**"
+        ]
       }
     }
   },
@@ -49,8 +51,18 @@
         "bundleMediaFramework": false
       },
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
       }
-    }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   }
 }

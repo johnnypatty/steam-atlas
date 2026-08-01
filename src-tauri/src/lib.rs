@@ -1135,7 +1135,7 @@ fn analyze_crash_log() -> Result<Option<CrashReport>, String> {
             excerpt: "Binary dump selected; text preview unavailable.".to_string(),
         }));
     }
-    let mut file = fs::File::open(&path).map_err(|error| error.to_string())?;
+    let file = fs::File::open(&path).map_err(|error| error.to_string())?;
     let mut content = String::new();
     file.take(2 * 1024 * 1024)
         .read_to_string(&mut content)
