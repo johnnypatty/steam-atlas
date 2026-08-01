@@ -35,6 +35,7 @@ export const emptyWorkspace = (appId: string): GameWorkspaceData => ({
   screenshotFavorites: [],
   screenshotTags: {},
   customArtwork: {},
+  artworkInstalls: [],
   createdAt: now(),
   updatedAt: now()
 });
@@ -102,6 +103,7 @@ export const normalizeWorkspace = (
     customArtwork: value.customArtwork && typeof value.customArtwork === "object" && !Array.isArray(value.customArtwork)
       ? value.customArtwork
       : {},
+    artworkInstalls: Array.isArray(value.artworkInstalls) ? value.artworkInstalls.slice(0, 100) : [],
     createdAt: typeof value.createdAt === "string" ? value.createdAt : fallback.createdAt,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : fallback.updatedAt
   };
