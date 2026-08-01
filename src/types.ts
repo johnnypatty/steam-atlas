@@ -33,6 +33,8 @@ export interface Game {
   buildId?: string;
   sizeOnDisk?: number;
   lastUpdated?: string;
+  minimumRequirements?: string;
+  recommendedRequirements?: string;
 }
 
 export interface SteamAccount {
@@ -194,11 +196,26 @@ export interface GameWorkspaceData {
   screenshotFavorites: string[];
   screenshotTags: Record<string, string[]>;
   customArtwork: Partial<Record<ArtworkKind, string>>;
+  artworkInstalls: ArtworkInstallRecord[];
   createdAt: string;
   updatedAt: string;
 }
 
 export type ArtworkKind = "grid" | "portrait" | "hero" | "logo";
+
+export interface ArtworkInstallRecord {
+  id: string;
+  kind: ArtworkKind;
+  steamId: string;
+  targetPath: string;
+  backupPath?: string;
+  installedAt: string;
+}
+
+export interface ArtworkInstallResult {
+  targetPath: string;
+  backupPath?: string;
+}
 
 export interface ConfigDiffLine {
   line: number;
