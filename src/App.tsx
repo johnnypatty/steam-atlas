@@ -67,10 +67,20 @@ import {
   sampleTools
 } from "./data";
 import { PowerSuite } from "./PowerSuite";
+import { GameWorkspace } from "./GameWorkspace";
+import {
+  loadAtlasData,
+  parseAtlasData,
+  saveAtlasData,
+  serializeAtlasData,
+  withWorkspace
+} from "./storage";
 import type {
+  AtlasUserData,
   AppSettings,
   ExternalTool,
   Game,
+  GameWorkspaceData,
   ManifestEntry,
   Page,
   PlatformInfo,
@@ -156,6 +166,9 @@ function App() {
   const [searchResults, setSearchResults] = useState<Game[]>(featuredGames);
   const [searching, setSearching] = useState(false);
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+  const [workspaceGame, setWorkspaceGame] = useState<Game | null>(null);
+  const [userData, setUserData] = useState<AtlasUserData>(loadAtlasData);
+  const [userDataReady, setUserDataReady] = useState(!isDesktop());
   const [accounts, setAccounts] = useState<SteamAccount[]>([]);
   const [library, setLibrary] = useState<Game[]>([]);
   const [manifests, setManifests] = useState<ManifestEntry[]>(() =>
@@ -260,6 +273,30 @@ function App() {
   useEffect(() => {
     localStorage.setItem("atlas.manifests", JSON.stringify(manifests));
   }, [manifests]);
+
+  useEffect(() => {
+    if (!isDesktop()) return;
+    void bridge.loadUserData()
+      .then((json) => {
+        if (json) setUserData(parseAtlasData(json));
+      })
+      .catch((error) => notify(error instanceof Error ? error.message : "Atlas could not load workspace data."))
+      .finally(() => setUserDataReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (!userDataReady) return;
+    if (isDesktop()) {
+      void bridge.saveUserData(serializeAtlasData(userData))
+        .catch((error) => notify(error instanceof Error ? error.message : "Atlas could not save workspace data."));
+      return;
+    }
+    try {
+      saveAtlasData(userData);
+    } catch {
+      notify("Atlas could not save personal workspace data. Check available disk space.");
+    }
+  }, [userData, userDataReady]);
 
   useEffect(() => {
     if (!toast) return;
@@ -572,8 +609,13 @@ function App() {
           {page === "library" && (
             <Library
               games={library}
+              workspaces={userData.workspaces}
               onScan={syncLocal}
               onGame={setSelectedGame}
+              onWorkspace={setWorkspaceGame}
+              onWorkspaceUpdate={(appId, update) =>
+                setUserData((current) => withWorkspace(current, appId, update))
+              }
               onLink={openLink}
             />
           )}
@@ -648,7 +690,46 @@ function App() {
         <GameDrawer
           game={selectedGame}
           onClose={() => setSelectedGame(null)}
+          onWorkspace={() => {
+            setWorkspaceGame(selectedGame);
+            setSelectedGame(null);
+          }}
           onLink={openLink}
+        />
+      )}
+      {workspaceGame && (
+        <GameWorkspace
+          game={workspaceGame}
+          workspace={userData.workspaces[String(workspaceGame.appid)] ?? {
+            appId: String(workspaceGame.appid),
+            favorite: false,
+            status: "Backlog",
+            rating: 0,
+            notes: "",
+            tags: [],
+            compatibilityNotes: "",
+            preferredProtonVersion: "",
+            saveLocations: [],
+            configLocations: [],
+            launchProfiles: [],
+            backups: [],
+            screenshotFavorites: [],
+            screenshotTags: {},
+            customArtwork: {},
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }}
+          platform={platform}
+          sessions={userData.sessions.filter((session) => session.appId === String(workspaceGame.appid))}
+          onUpdate={(update) =>
+            setUserData((current) => withWorkspace(current, String(workspaceGame.appid), update))
+          }
+          onSession={(session) =>
+            setUserData((current) => ({ ...current, sessions: [session, ...current.sessions].slice(0, 2_000) }))
+          }
+          onClose={() => setWorkspaceGame(null)}
+          onLink={openLink}
+          notify={notify}
         />
       )}
       {showToolModal && (
@@ -1080,19 +1161,38 @@ function GameCard({ game, onClick }: { game: Game; onClick: () => void }) {
 
 function Library({
   games,
+  workspaces,
   onScan,
   onGame,
+  onWorkspace,
+  onWorkspaceUpdate,
   onLink
 }: {
   games: Game[];
+  workspaces: Record<string, GameWorkspaceData>;
   onScan: () => void;
   onGame: (game: Game) => void;
+  onWorkspace: (game: Game) => void;
+  onWorkspaceUpdate: (appId: string, update: (workspace: GameWorkspaceData) => GameWorkspaceData) => void;
   onLink: (url: string) => void;
 }) {
   const [libraryQuery, setLibraryQuery] = useState("");
-  const shown = games.filter((game) =>
-    game.name.toLowerCase().includes(libraryQuery.toLowerCase())
-  );
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [sort, setSort] = useState("name");
+  const shown = [...games]
+    .filter((game) => {
+      const workspace = workspaces[String(game.appid)];
+      const search = `${game.name} ${game.tags.join(" ")} ${workspace?.tags.join(" ") || ""}`.toLowerCase();
+      return search.includes(libraryQuery.toLowerCase())
+        && (statusFilter === "All" || workspace?.status === statusFilter)
+        && (!favoriteOnly || workspace?.favorite);
+    })
+    .sort((left, right) => {
+      if (sort === "size") return (right.sizeOnDisk || 0) - (left.sizeOnDisk || 0);
+      if (sort === "rating") return (workspaces[String(right.appid)]?.rating || 0) - (workspaces[String(left.appid)]?.rating || 0);
+      return left.name.localeCompare(right.name);
+    });
   const totalSize = games.reduce(
     (sum, game) => sum + (game.sizeOnDisk ?? 0),
     0
@@ -1133,6 +1233,29 @@ function Library({
             placeholder="Filter installed games"
           />
         </label>
+        <div className="library-filter-select">
+          <DarkSelect
+            value={statusFilter}
+            ariaLabel="Filter by backlog status"
+            options={["All", "Backlog", "Next", "Playing", "Finished", "Dropped", "Replay"].map((value) => ({ value, label: value === "All" ? "All statuses" : value }))}
+            onChange={setStatusFilter}
+          />
+        </div>
+        <div className="library-filter-select">
+          <DarkSelect
+            value={sort}
+            ariaLabel="Sort library"
+            options={[
+              { value: "name", label: "Sort: Name" },
+              { value: "size", label: "Sort: Largest" },
+              { value: "rating", label: "Sort: My rating" }
+            ]}
+            onChange={setSort}
+          />
+        </div>
+        <button className={`secondary-button ${favoriteOnly ? "active" : ""}`} onClick={() => setFavoriteOnly((value) => !value)} aria-pressed={favoriteOnly}>
+          <Heart size={16} fill={favoriteOnly ? "currentColor" : "none"} /> Favorites
+        </button>
         <button
           className="secondary-button"
           onClick={() => onLink("steam://open/games")}
@@ -1150,16 +1273,25 @@ function Library({
             <span />
           </div>
           {shown.map((game) => (
-            <button
+            <div
               className="library-row"
               key={game.appid}
+              role="button"
+              tabIndex={0}
               onClick={() => onGame(game)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") onGame(game);
+              }}
             >
               <span className="library-game">
                 <GameImage game={game} alt={`${game.name} artwork`} />
                 <span>
                   <strong>{game.name}</strong>
-                  <small>AppID {game.appid}</small>
+                  <small>
+                    AppID {game.appid}
+                    {workspaces[String(game.appid)]?.status ? ` · ${workspaces[String(game.appid)].status}` : ""}
+                    {workspaces[String(game.appid)]?.rating ? ` · ${workspaces[String(game.appid)].rating.toFixed(1)}/10` : ""}
+                  </small>
                 </span>
               </span>
               <span>
@@ -1168,9 +1300,20 @@ function Library({
               <span>{formatBytes(game.sizeOnDisk)}</span>
               <span>{game.lastUpdated ?? "Unknown"}</span>
               <span>
-                <MoreHorizontal size={18} />
+                <button
+                  className={`mini-icon ${workspaces[String(game.appid)]?.favorite ? "active" : ""}`}
+                  title={workspaces[String(game.appid)]?.favorite ? "Remove favorite" : "Add favorite"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const current = workspaces[String(game.appid)] ?? {
+                      appId: String(game.appid), favorite: false, status: "Backlog", rating: 0, notes: "", tags: [], compatibilityNotes: "", preferredProtonVersion: "", saveLocations: [], configLocations: [], launchProfiles: [], backups: [], screenshotFavorites: [], screenshotTags: {}, customArtwork: {}, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+                    };
+                    onWorkspaceUpdate(String(game.appid), (workspace) => ({ ...workspace, favorite: !current.favorite }));
+                  }}
+                ><Heart size={16} fill={workspaces[String(game.appid)]?.favorite ? "currentColor" : "none"} /></button>
+                <button className="text-button" onClick={(event) => { event.stopPropagation(); onWorkspace(game); }}>Workspace <ArrowRight size={14} /></button>
               </span>
-            </button>
+            </div>
           ))}
         </div>
       ) : (
@@ -2395,10 +2538,12 @@ function SettingToggle({
 function GameDrawer({
   game,
   onClose,
+  onWorkspace,
   onLink
 }: {
   game: Game;
   onClose: () => void;
+  onWorkspace: () => void;
   onLink: (url: string) => void;
 }) {
   return (
@@ -2458,8 +2603,11 @@ function GameDrawer({
             </div>
           </dl>
           <div className="drawer-actions">
+            <button className="primary-button" onClick={onWorkspace}>
+              Open workspace <ArrowRight size={16} />
+            </button>
             <button
-              className="primary-button"
+              className="secondary-button"
               onClick={() =>
                 onLink(`https://store.steampowered.com/app/${game.appid}`)
               }
