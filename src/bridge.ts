@@ -39,6 +39,8 @@ export const bridge = {
   platformInfo: () => desktopInvoke<PlatformInfo>("platform_info"),
   loadUserData: () => desktopInvoke<string | null>("load_user_data"),
   saveUserData: (json: string) => desktopInvoke<void>("save_user_data", { json }),
+  exportUserData: (json: string) => desktopInvoke<string | null>("export_user_data", { json }),
+  importUserData: () => desktopInvoke<string | null>("import_user_data"),
   loadSecrets: () =>
     desktopInvoke<{ steamApiKey: string; steamLadderApiKey: string; backend: string }>(
       "load_secrets"
