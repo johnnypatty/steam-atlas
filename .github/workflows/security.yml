@@ -3,7 +3,7 @@ name: Security checks
 on:
   pull_request:
   push:
-    branches: [main, agent/beta-0.2]
+    branches: [main, agent/beta-0.2, agent/v1-game-workspaces]
   schedule:
     - cron: "17 4 * * 1"
 
@@ -12,6 +12,13 @@ permissions:
   security-events: write
 
 jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+
   codeql:
     runs-on: ubuntu-latest
     steps:
