@@ -77,6 +77,8 @@ export interface ExternalTool {
   trustedAt?: string;
 }
 
+export type DashboardWidget = "stats" | "discovery" | "quickActions" | "systemStatus";
+
 export interface AppSettings {
   steamApiKey: string;
   steamLadderApiKey: string;
@@ -102,6 +104,8 @@ export interface AppSettings {
   oledMode: boolean;
   reduceMotion: boolean;
   highContrast: boolean;
+  deckMode: boolean;
+  dashboardWidgets: DashboardWidget[];
   theme: "system" | "dark" | "light";
   updateChannel: "stable" | "beta" | "manual";
   onboardingComplete: boolean;
@@ -137,6 +141,7 @@ export interface BackupRecord {
   createdAt: string;
   fileCount: number;
   totalBytes: number;
+  integrity?: "verified-sha256" | "legacy-unverified";
   appId?: string;
   locationId?: string;
   kind?: "save" | "config" | "recovery";
@@ -193,6 +198,7 @@ export interface GameWorkspaceData {
   configLocations: ManagedLocation[];
   launchProfiles: GameLaunchProfile[];
   backups: BackupRecord[];
+  backupRetentionCount: number;
   screenshotFavorites: string[];
   screenshotTags: Record<string, string[]>;
   customArtwork: Partial<Record<ArtworkKind, string>>;
@@ -244,6 +250,14 @@ export interface BackupPreview {
   fileCount: number;
   totalBytes: number;
   recoveryWillBeCreated: boolean;
+  integrity: "verified-sha256" | "legacy-unverified";
+}
+
+export interface BackupIntegrityResult {
+  status: "verified-sha256" | "legacy-unverified";
+  fileCount: number;
+  totalBytes: number;
+  checkedAt: string;
 }
 
 export interface RestoreResult {
