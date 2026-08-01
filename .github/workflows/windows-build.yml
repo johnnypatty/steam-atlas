@@ -1,9 +1,9 @@
-name: Windows build
+name: Desktop build
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, agent/beta-0.2]
     tags: ["v*"]
   pull_request:
 
@@ -11,7 +11,24 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  web:
+    name: Web quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  windows:
+    name: Windows x64
+    needs: web
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -36,14 +53,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit JavaScript dependencies
-        run: npm audit --audit-level=high
-
-      - name: Build web interface
-        run: npm run build
-
       - name: Build Windows application
-        run: npm run desktop:build
+        run: npm run desktop:windows
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -53,3 +64,41 @@ jobs:
           path: |
             src-tauri/target/release/steam-atlas.exe
             src-tauri/target/release/bundle/nsis/*
+
+  linux:
+    name: Linux x64
+    needs: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Test native core
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build Linux application
+        run: npm run desktop:linux
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: steam-atlas-linux
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/steam-atlas
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb

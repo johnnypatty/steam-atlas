@@ -58,6 +58,7 @@ import {
 import { bridge, isDesktop, localAssetUrl } from "./bridge";
 import { DarkSelect } from "./components/DarkSelect";
 import { GameImage } from "./components/GameImage";
+import { AtlasLogo } from "./components/AtlasLogo";
 import {
   featuredGames,
   installedGames,
@@ -72,6 +73,7 @@ import type {
   Game,
   ManifestEntry,
   Page,
+  PlatformInfo,
   SteamAccount
 } from "./types";
 
@@ -98,7 +100,8 @@ const defaultSettings: AppSettings = {
   uiScale: 100,
   density: "comfortable",
   oledMode: false,
-  reduceMotion: false
+  reduceMotion: false,
+  theme: "system"
 };
 
 const navItems: { id: Page; label: string; icon: typeof Activity }[] = [
@@ -169,6 +172,38 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [platform, setPlatform] = useState<PlatformInfo | null>(null);
+
+  useEffect(() => {
+    if (!isDesktop()) return;
+    const legacySteamApiKey = settings.steamApiKey;
+    const legacySteamLadderApiKey = settings.steamLadderApiKey;
+    void (async () => {
+      try {
+        if (legacySteamApiKey || legacySteamLadderApiKey) {
+          await bridge.saveSecrets(legacySteamApiKey, legacySteamLadderApiKey);
+        }
+        const [secrets, info] = await Promise.all([
+          bridge.loadSecrets(),
+          bridge.platformInfo()
+        ]);
+        setSettings((current) => ({
+          ...current,
+          steamApiKey: secrets.steamApiKey,
+          steamLadderApiKey: secrets.steamLadderApiKey
+        }));
+        setPlatform(info);
+      } catch (error) {
+        notify(
+          error instanceof Error
+            ? `Secure storage: ${error.message}`
+            : "Secure credential storage is unavailable."
+        );
+      }
+    })();
+  // Legacy values are captured once, then removed from WebView storage below.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -195,9 +230,15 @@ function App() {
     root.style.setProperty("--ui-scale", String(settings.uiScale / 100));
     root.dataset.backgroundPreset = settings.backgroundPreset;
     root.dataset.density = settings.density;
-    root.dataset.oled = String(settings.oledMode);
+    const systemLight = window.matchMedia("(prefers-color-scheme: light)").matches;
+    const resolvedTheme = settings.theme === "system"
+      ? (systemLight ? "light" : "dark")
+      : settings.theme;
+    root.dataset.theme = resolvedTheme;
+    root.dataset.oled = String(settings.oledMode && resolvedTheme === "dark");
     root.dataset.reduceMotion = String(settings.reduceMotion);
-    localStorage.setItem("atlas.settings", JSON.stringify(settings));
+    const { steamApiKey: _steamApiKey, steamLadderApiKey: _steamLadderApiKey, ...safeSettings } = settings;
+    localStorage.setItem("atlas.settings", JSON.stringify(safeSettings));
   }, [settings]);
 
   useEffect(() => {
@@ -411,11 +452,7 @@ function App() {
           onClick={() => setPage("overview")}
           aria-label="Steam Atlas home"
         >
-          <span className="brand-mark">
-            <span />
-            <span />
-            <span />
-          </span>
+          <span className="brand-mark"><AtlasLogo /></span>
           {sidebarOpen && (
             <span className="brand-copy">
               <strong>STEAM ATLAS</strong>
@@ -446,7 +483,11 @@ function App() {
           <div className="local-status">
             <div className="status-head">
               <span className={`status-dot ${isDesktop() ? "online" : ""}`} />
-              <span>{isDesktop() ? "Desktop connected" : "Browser preview"}</span>
+              <span>
+                {isDesktop()
+                  ? `${platform?.os === "linux" ? "Linux" : "Windows"} connected`
+                  : "Browser preview"}
+              </span>
             </div>
             <p>
               {isDesktop()
@@ -597,6 +638,7 @@ function App() {
               setSettings={setSettings}
               notify={notify}
               onLink={openLink}
+              platform={platform}
             />
           )}
         </div>
@@ -1588,7 +1630,7 @@ function AuthorizedDownloadPanel({
               <input
                 value={steamCmdPath}
                 onChange={(event) => setSteamCmdPath(event.target.value)}
-                placeholder="C:\steamcmd\steamcmd.exe"
+                placeholder="steamcmd.exe on Windows · steamcmd.sh on Linux"
                 required
               />
               <button type="button" onClick={chooseSteamCmd}>
@@ -1768,21 +1810,34 @@ function SettingsPage({
   settings,
   setSettings,
   notify,
-  onLink
+  onLink,
+  platform
 }: {
   settings: AppSettings;
   setSettings: (settings: AppSettings) => void;
   notify: (message: string) => void;
   onLink: (url: string) => void;
+  platform: PlatformInfo | null;
 }) {
   const [draft, setDraft] = useState<AppSettings>({
     ...defaultSettings,
     ...settings
   });
 
-  const save = () => {
-    setSettings(draft);
-    notify("Settings saved locally.");
+  const save = async () => {
+    try {
+      if (isDesktop()) {
+        await bridge.saveSecrets(draft.steamApiKey, draft.steamLadderApiKey);
+      }
+      setSettings(draft);
+      notify(
+        isDesktop()
+          ? "Settings saved. API keys are protected by the operating system."
+          : "Preview settings saved locally."
+      );
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not save credentials securely.");
+    }
   };
 
   const pickBackground = async () => {
@@ -1847,7 +1902,7 @@ function SettingsPage({
         title="Settings"
         description="Connect optional public-data APIs and tune Atlas to your system."
         actions={
-          <button className="primary-button" onClick={save}>
+          <button className="primary-button" onClick={() => void save()}>
             <Check size={17} /> Save changes
           </button>
         }
@@ -1860,7 +1915,9 @@ function SettingsPage({
             </span>
             <div>
               <h3>Data connections</h3>
-              <p>Keys remain in this app’s local configuration.</p>
+              <p>
+                {platform?.secureStorage || "Operating-system credential vault"}
+              </p>
             </div>
           </div>
           <label className="field">
@@ -2024,6 +2081,19 @@ function SettingsPage({
             </div>
           </label>
           <div className="background-controls">
+            <div className="field">
+              <span>Interface theme</span>
+              <DarkSelect
+                value={draft.theme}
+                onChange={(theme) => setDraft({ ...draft, theme: theme as AppSettings["theme"] })}
+                ariaLabel="Interface theme"
+                options={[
+                  { value: "system", label: "System", detail: "Follow Windows or Linux" },
+                  { value: "dark", label: "Dark", detail: "Atlas night" },
+                  { value: "light", label: "Light", detail: "High-clarity daylight" }
+                ]}
+              />
+            </div>
             <div className="field">
               <span>Built-in background</span>
               <DarkSelect
@@ -2231,6 +2301,9 @@ function SettingsPage({
             </li>
             <li>
               <Check size={15} /> Steam entitlement remains authoritative
+            </li>
+            <li>
+              <Check size={15} /> {platform?.os === "linux" ? "Linux, Flatpak and Proton aware" : "Windows Credential Manager integration"}
             </li>
           </ul>
           <div className="portable-actions">

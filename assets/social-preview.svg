@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Steam Atlas Beta 0.2</title>
+  <desc id="desc">Cross-platform, local-first Steam library intelligence for Windows and Linux.</desc>
+  <defs>
+    <radialGradient id="bg" cx="82%" cy="18%" r="85%"><stop stop-color="#183549"/><stop offset=".55" stop-color="#0a1018"/><stop offset="1" stop-color="#05070a"/></radialGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d9fbff"/><stop offset=".45" stop-color="#66e3ff"/><stop offset="1" stop-color="#7b82ff"/></linearGradient>
+  </defs>
+  <rect width="1280" height="640" rx="36" fill="url(#bg)"/>
+  <path d="M0 525C257 440 335 580 588 499s353-288 692-215" fill="none" stroke="#66e3ff" stroke-opacity=".12" stroke-width="2"/>
+  <g transform="translate(850 98) scale(7)" fill="none" stroke="url(#line)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 34c9-11 39-19 48-8 9 12-18 31-37 26C1 47 0 28 14 16" stroke-width="1.7" opacity=".58"/>
+    <path d="M18 53c-2-16 9-42 24-42 16 0 18 29 5 42" stroke-width="1.5" opacity=".75"/>
+    <path d="M19 49 31.8 14 45 49M24 37h16" stroke-width="3.5"/>
+    <circle cx="14" cy="16" r="3.2" fill="#d9fbff" stroke="none"/><circle cx="32" cy="37" r="3.5" fill="#66e3ff" stroke="none"/>
+  </g>
+  <text x="92" y="242" fill="#66e3ff" font-family="Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="7">LOCAL-FIRST · CROSS-PLATFORM</text>
+  <text x="88" y="343" fill="#f3f8fc" font-family="Arial, sans-serif" font-size="82" font-weight="700">STEAM ATLAS</text>
+  <text x="93" y="405" fill="#9ba9b8" font-family="Arial, sans-serif" font-size="27">Library intelligence and a safer command center</text>
+  <text x="93" y="490" fill="#dce8f0" font-family="Arial, sans-serif" font-size="21">Windows  ·  Linux  ·  Steam + Proton  ·  Beta 0.2</text>
+</svg>

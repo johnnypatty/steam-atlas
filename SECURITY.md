@@ -2,49 +2,55 @@
 
 ## Supported version
 
-Steam Atlas is beta software. Security fixes currently target the newest
-`0.1.x` source version only.
+Security fixes target the newest `0.2.x` beta. Older prereleases should be
+upgraded before a report is reproduced.
 
 ## Trust boundary
 
 Steam Atlas is local-first and has no Atlas account or cloud database. It may:
 
-- read Steam's local account list and app manifests;
-- read recent screenshot images after an explicit scan;
-- copy an explicitly selected folder into Atlas's backup directory;
-- open approved `https`, `http`, and `steam` links;
-- launch only a user-selected executable or supported script type;
-- start official `steamcmd.exe` with validated identifiers; and
-- make HTTPS requests to Steam Store, Steam Community, Valve Web API, and
-  Steam Ladder endpoints.
+- read Steam's local account display metadata, app manifests, artwork cache and
+  recent screenshots after an explicit scan;
+- copy an explicitly selected folder into its application-data backup area;
+- query a documented set of Steam, Steam Community and Steam Ladder HTTPS
+  endpoints with bounded responses and timeouts;
+- open only allowlisted HTTPS destinations and `steam://open/games`;
+- launch only an explicitly selected, supported local application/script with a
+  bounded argument array; and
+- start official SteamCMD with validated identifiers.
 
-It must not read Steam passwords or Guard secrets, fabricate entitlements,
-delete orphaned folders, accept arbitrary shell command strings, or silently
-launch programs.
+It must not read Steam passwords or Guard secrets, collect refresh/session
+tokens, fabricate entitlements, unlock paid content, delete orphaned folders,
+accept generic shell command strings or launch programs silently.
 
-Optional API keys are stored in WebView local storage in this beta. Do not use
-them on a shared Windows account. Portable exports deliberately exclude keys.
+## Protected credentials
 
-## Antivirus detections
+Optional API keys are stored in Windows Credential Manager or Linux Secret
+Service. Beta 0.2 migrates legacy keys from WebView storage and rewrites browser
+settings without those fields. Portable exports are defensively redacted in
+both the UI and Rust backend.
 
-An unsigned, newly built launcher can trigger reputation or behavioral
-heuristics. Do not assume every alert is a false positive.
-
-When reporting a detection, include:
-
-- antivirus product and database version;
-- exact detection name;
-- whether it affected the portable EXE, MSI, or NSIS installer;
-- SHA-256 hash of the affected file;
-- build command and source commit; and
-- whether the detection reproduces after rebuilding on a clean machine.
-
-Submit false positives through the antivirus vendor's official analysis
-channel. Use narrow, file-specific exclusions only after review. Never ask
-users to disable their antivirus globally.
+The credential vault is scoped to the logged-in operating-system account. Do
+not share an unlocked OS session with untrusted users.
 
 ## Reporting a vulnerability
 
-Open a private GitHub security advisory when the repository enables them. Do
-not publish credentials, local paths, Steam account data, or a working exploit
-in a public issue.
+Use a private GitHub security advisory. Do not place credentials, real local
+paths, Steam account data or a working exploit in a public issue.
+
+Useful details include:
+
+- affected source commit and operating system;
+- expected versus actual security boundary;
+- minimal reproduction using non-sensitive sample data;
+- whether the issue requires user interaction; and
+- suggested mitigation, if known.
+
+## Antivirus detections
+
+An unsigned launcher can trigger reputation and behavioral heuristics. Include
+the antivirus product/database version, exact detection name, affected artifact,
+SHA-256, build command and source commit. Prefer vendor analysis and narrow,
+file-specific exclusions; never disable antivirus globally.
+
+See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for abuse cases and mitigations.

@@ -25,6 +25,83 @@
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
 }
 
+:root[data-theme="light"] {
+  color: #152331;
+  background: #e9eef3;
+  --bg: #e9eef3;
+  --bg-raised: #f6f8fa;
+  --panel: rgba(255, 255, 255, 0.88);
+  --panel-strong: #ffffff;
+  --line: rgba(24, 43, 60, 0.11);
+  --line-strong: rgba(24, 43, 60, 0.2);
+  --muted: #627181;
+  --soft: #44586b;
+  --shadow: 0 18px 46px rgba(37, 54, 69, 0.13);
+}
+
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(circle at 82% -12%, rgba(var(--accent-rgb), 0.13), transparent 36%),
+    linear-gradient(145deg, #f7f9fb, #e7edf2 65%, #f3f6f8);
+}
+
+:root[data-theme="light"] .sidebar,
+:root[data-theme="light"] .topbar {
+  background: rgba(249, 251, 253, 0.88);
+}
+
+:root[data-theme="light"] .panel,
+:root[data-theme="light"] .game-card,
+:root[data-theme="light"] .library-summary,
+:root[data-theme="light"] .notice-card,
+:root[data-theme="light"] .manifest-card,
+:root[data-theme="light"] .tool-card,
+:root[data-theme="light"] .quick-action,
+:root[data-theme="light"] .command-palette,
+:root[data-theme="light"] .modal,
+:root[data-theme="light"] .drawer {
+  background: rgba(255, 255, 255, 0.88);
+  color: #152331;
+  box-shadow: var(--shadow);
+}
+
+:root[data-theme="light"] input,
+:root[data-theme="light"] textarea,
+:root[data-theme="light"] .dark-select > button,
+:root[data-theme="light"] .dark-select-menu {
+  background: rgba(235, 241, 246, 0.96);
+  color: #152331;
+}
+
+:root[data-theme="light"] .nav-item,
+:root[data-theme="light"] .collapse-button {
+  color: #526677;
+}
+
+:root[data-theme="light"] .nav-item:hover,
+:root[data-theme="light"] .nav-item.active,
+:root[data-theme="light"] .command-results button:hover {
+  background: rgba(var(--accent-rgb), 0.13);
+  color: #132431;
+}
+
+:root[data-theme="light"] .global-search,
+:root[data-theme="light"] .profile-chip,
+:root[data-theme="light"] .local-status,
+:root[data-theme="light"] .library-row,
+:root[data-theme="light"] .toolbar,
+:root[data-theme="light"] .setting-toggle {
+  background: rgba(255, 255, 255, 0.7);
+  color: #152331;
+}
+
+:root[data-theme="light"] code,
+:root[data-theme="light"] kbd,
+:root[data-theme="light"] small,
+:root[data-theme="light"] p {
+  color: var(--muted);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -116,45 +193,37 @@ kbd {
   height: 34px;
   flex: 0 0 auto;
   place-items: center;
-  transform: rotate(-8deg);
+  color: var(--accent);
 }
 
-.brand-mark::before,
-.brand-mark::after,
-.brand-mark span {
-  position: absolute;
-  border: 1.5px solid var(--accent);
-  border-radius: 50%;
-  content: "";
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent), transparent 48%));
+.brand-mark svg {
+  width: 36px;
+  height: 36px;
+  overflow: visible;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent), transparent 58%));
 }
 
-.brand-mark::before {
-  width: 26px;
-  height: 11px;
+.atlas-logo-orbit,
+.atlas-logo-a {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.brand-mark::after {
-  width: 11px;
-  height: 26px;
+.atlas-logo-orbit { stroke-width: 1.7; opacity: 0.62; }
+.atlas-logo-orbit-b { stroke-width: 1.45; opacity: 0.8; }
+.atlas-logo-a { stroke-width: 3.35; }
+.atlas-logo-node { fill: #d9fbff; }
+.atlas-logo-core { fill: currentColor; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .brand:hover .atlas-logo-orbit-a { animation: atlas-orbit 3.8s linear infinite; transform-origin: 32px 32px; }
+  .brand:hover .atlas-logo-orbit-b { animation: atlas-orbit 5.2s linear infinite reverse; transform-origin: 32px 32px; }
 }
 
-.brand-mark span:nth-child(1) {
-  width: 23px;
-  height: 23px;
-}
-
-.brand-mark span:nth-child(2) {
-  width: 6px;
-  height: 6px;
-  border: 0;
-  background: var(--accent);
-}
-
-.brand-mark span:nth-child(3) {
-  width: 31px;
-  height: 31px;
-  border-color: color-mix(in srgb, var(--accent), transparent 75%);
+@keyframes atlas-orbit {
+  to { transform: rotate(360deg); }
 }
 
 .brand-copy {
@@ -2692,7 +2761,7 @@ kbd {
   }
 }
 
-/* Beta 0.1 appearance engine */
+/* Beta 0.2 appearance engine */
 
 html {
   color-scheme: dark;

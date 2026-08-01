@@ -98,6 +98,16 @@ export interface AppSettings {
   density: "compact" | "comfortable" | "spacious";
   oledMode: boolean;
   reduceMotion: boolean;
+  theme: "system" | "dark" | "light";
+}
+
+export interface PlatformInfo {
+  os: "windows" | "linux" | "macos" | "unknown";
+  architecture: string;
+  steamRoots: string[];
+  flatpakSteam: boolean;
+  secureStorage: string;
+  packageFormats: string[];
 }
 
 export interface AccountProfile {

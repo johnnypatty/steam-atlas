@@ -52,28 +52,21 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "Building the Windows application and installers..." -ForegroundColor Cyan
+Write-Host "Building the Windows application and NSIS installer..." -ForegroundColor Cyan
 $buildStarted = Get-Date
-npm run desktop:build
+npm run desktop:windows
 $tauriExitCode = $LASTEXITCODE
 
 $portableExe = "src-tauri\target\release\steam-atlas.exe"
 $nsisDirectory = "src-tauri\target\release\bundle\nsis"
-$msiDirectory = "src-tauri\target\release\bundle\msi"
 $portableFresh = $false
 $nsisFiles = @()
-$msiFiles = @()
 
 if (Test-Path $portableExe) {
     $portableFresh = (Get-Item $portableExe).LastWriteTime -ge $buildStarted.AddSeconds(-3)
 }
 if (Test-Path $nsisDirectory) {
     $nsisFiles = @(Get-ChildItem $nsisDirectory -File -ErrorAction SilentlyContinue | Where-Object {
-        $_.LastWriteTime -ge $buildStarted.AddSeconds(-3)
-    })
-}
-if (Test-Path $msiDirectory) {
-    $msiFiles = @(Get-ChildItem $msiDirectory -File -ErrorAction SilentlyContinue | Where-Object {
         $_.LastWriteTime -ge $buildStarted.AddSeconds(-3)
     })
 }
@@ -95,14 +88,6 @@ if ($nsisFiles.Count -gt 0) {
     Write-Host "[missing] NSIS installer was not created." -ForegroundColor Yellow
 }
 
-if ($msiFiles.Count -gt 0) {
-    Write-Host "[ready] MSI installer: $($msiFiles[0].FullName)" -ForegroundColor Green
-} elseif (Test-Path $msiDirectory) {
-    Write-Host "[stale] MSI folder exists, but this build did not create an installer." -ForegroundColor Yellow
-} else {
-    Write-Host "[missing] MSI installer was not created." -ForegroundColor Yellow
-}
-
 if ($tauriExitCode -ne 0) {
     Write-Host ""
     Write-Host "Tauri returned exit code $tauriExitCode." -ForegroundColor Red
@@ -113,7 +98,7 @@ if ($tauriExitCode -ne 0) {
     exit $tauriExitCode
 }
 
-if (-not $portableFresh -or ($nsisFiles.Count -eq 0 -and $msiFiles.Count -eq 0)) {
+if (-not $portableFresh -or $nsisFiles.Count -eq 0) {
     Write-Host ""
     Write-Host "Tauri exited successfully, but fresh expected artifacts were not found." -ForegroundColor Red
     exit 1
