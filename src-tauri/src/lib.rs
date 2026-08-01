@@ -49,6 +49,18 @@ struct PlatformInfo {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AppSecurityInfo {
+    version: String,
+    executable_path: String,
+    executable_sha256: String,
+    build_type: String,
+    capabilities: Vec<String>,
+    read_scopes: Vec<String>,
+    network_domains: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SteamAccount {
     steam_id: String,
     account_name: String,
@@ -315,7 +327,7 @@ fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(6))
         .timeout(Duration::from_secs(14))
-        .user_agent("Steam-Atlas/0.2 (+local desktop application)")
+        .user_agent("Steam-Atlas/1.0 (+local desktop application)")
         .build()
         .map_err(|error| format!("Could not initialize the network client: {error}"))
 }
@@ -631,6 +643,40 @@ fn platform_info() -> PlatformInfo {
         mango_hud_available: command_available("mangohud"),
         proton_roots,
     }
+}
+
+#[tauri::command]
+fn app_security_info() -> Result<AppSecurityInfo, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Could not resolve the Atlas executable: {error}"))?
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the Atlas executable: {error}"))?;
+    Ok(AppSecurityInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        executable_sha256: hash_file(&executable)?,
+        executable_path: executable.to_string_lossy().to_string(),
+        build_type: if cfg!(debug_assertions) { "debug" } else { "release" }.to_string(),
+        capabilities: vec![
+            "Read detected Steam metadata".to_string(),
+            "Read files and folders explicitly selected by the user".to_string(),
+            "Create and restore Atlas-managed snapshots after review".to_string(),
+            "Launch trusted tools and validated Steam AppIDs".to_string(),
+            "Open allowlisted external resources".to_string(),
+        ],
+        read_scopes: vec![
+            "Steam login display metadata and app manifests".to_string(),
+            "Steam screenshots and artwork cache".to_string(),
+            "User-selected save, configuration and diagnostic paths".to_string(),
+            "Atlas application-data directory".to_string(),
+        ],
+        network_domains: vec![
+            "store.steampowered.com".to_string(),
+            "api.steampowered.com".to_string(),
+            "steamcommunity.com".to_string(),
+            "steamladder.com (optional)".to_string(),
+            "Official Steam artwork CDNs".to_string(),
+        ],
+    })
 }
 
 fn command_available(name: &str) -> bool {
@@ -2645,6 +2691,7 @@ fn is_trusted_external_url(parsed: &Url) -> bool {
                 "steamdb.info",
                 "steamladder.com",
                 "protondb.com",
+                "kaspersky.com",
             ]
             .iter()
             .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
@@ -2851,6 +2898,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             platform_info,
+            app_security_info,
             load_secrets,
             save_secrets,
             load_user_data,
@@ -2908,6 +2956,7 @@ mod tests {
             "https://steamcommunity.com/profiles/76561198000000000",
             "https://steamdb.info/app/730/",
             "https://www.protondb.com/app/730",
+            "https://support.kaspersky.com/1870",
             "steam://open/games",
         ] {
             assert!(is_trusted_external_url(&Url::parse(value).unwrap()), "{value}");
