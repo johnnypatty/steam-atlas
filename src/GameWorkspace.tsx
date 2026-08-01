@@ -29,6 +29,7 @@ import { GameImage } from "./components/GameImage";
 import type {
   BackupPreview,
   ArtworkKind,
+  ArtworkInstallRecord,
   ConfigDiff,
   Game,
   GameLaunchProfile,
@@ -38,7 +39,9 @@ import type {
   LibraryStatus,
   ManagedLocation,
   PlatformInfo,
-  ScreenshotRecord
+  ScreenshotRecord,
+  SteamAccount,
+  SystemDiagnostics
 } from "./types";
 
 type WorkspaceTab = "overview" | "saves" | "launch" | "config" | "media" | "artwork" | "compatibility";
@@ -74,6 +77,7 @@ const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() |
 export function GameWorkspace({
   game,
   tools,
+  accounts,
   workspace,
   platform,
   sessions,
@@ -85,6 +89,7 @@ export function GameWorkspace({
 }: {
   game: Game;
   tools: ExternalTool[];
+  accounts: SteamAccount[];
   workspace: GameWorkspaceData;
   platform: PlatformInfo | null;
   sessions: GameSession[];
@@ -250,7 +255,7 @@ export function GameWorkspace({
 
           {tab === "media" && <MediaWorkbench game={game} workspace={workspace} onUpdate={onUpdate} notify={notify} />}
 
-          {tab === "artwork" && <ArtworkWorkbench game={game} workspace={workspace} onUpdate={onUpdate} notify={notify} />}
+          {tab === "artwork" && <ArtworkWorkbench game={game} accounts={accounts} workspace={workspace} onUpdate={onUpdate} notify={notify} />}
 
           {tab === "compatibility" && (
             <CompatibilityWorkbench
@@ -259,6 +264,7 @@ export function GameWorkspace({
               workspace={workspace}
               onUpdate={onUpdate}
               onLink={onLink}
+              notify={notify}
             />
           )}
         </main>
@@ -617,16 +623,19 @@ function MediaWorkbench({
 
 function ArtworkWorkbench({
   game,
+  accounts,
   workspace,
   onUpdate,
   notify
 }: {
   game: Game;
+  accounts: SteamAccount[];
   workspace: GameWorkspaceData;
   onUpdate: (update: (current: GameWorkspaceData) => GameWorkspaceData) => void;
   notify: (message: string) => void;
 }) {
   const [busy, setBusy] = useState<ArtworkKind | "">("");
+  const [selectedSteamId, setSelectedSteamId] = useState(accounts[0]?.steamId || "");
   const definitions: Array<{ kind: ArtworkKind; title: string; guidance: string }> = [
     { kind: "grid", title: "Landscape grid", guidance: "Recommended 920 × 430" },
     { kind: "portrait", title: "Portrait grid", guidance: "Recommended 600 × 900" },
@@ -647,16 +656,64 @@ function ArtworkWorkbench({
       setBusy("");
     }
   };
+  const install = async (kind: ArtworkKind, sourcePath: string) => {
+    if (!selectedSteamId) {
+      notify("Select a detected local Steam account first.");
+      return;
+    }
+    setBusy(kind);
+    try {
+      const result = await bridge.installSteamArtwork(String(game.appid), selectedSteamId, kind, sourcePath);
+      const record: ArtworkInstallRecord = {
+        id: crypto.randomUUID(),
+        kind,
+        steamId: selectedSteamId,
+        targetPath: result.targetPath,
+        backupPath: result.backupPath,
+        installedAt: new Date().toISOString()
+      };
+      onUpdate((current) => ({ ...current, artworkInstalls: [record, ...current.artworkInstalls].slice(0, 100) }));
+      notify(`${definitions.find((item) => item.kind === kind)?.title} installed for the selected Steam account. Restart Steam if it is cached.`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Steam artwork installation failed.");
+    } finally {
+      setBusy("");
+    }
+  };
+  const restore = async (record: ArtworkInstallRecord) => {
+    if (!record.backupPath) return;
+    setBusy(record.kind);
+    try {
+      const result = await bridge.restoreSteamArtwork(String(game.appid), record.steamId, record.kind, record.backupPath);
+      const restored: ArtworkInstallRecord = {
+        id: crypto.randomUUID(),
+        kind: record.kind,
+        steamId: record.steamId,
+        targetPath: result.targetPath,
+        backupPath: result.backupPath,
+        installedAt: new Date().toISOString()
+      };
+      onUpdate((current) => ({ ...current, artworkInstalls: [restored, ...current.artworkInstalls].slice(0, 100) }));
+      notify("Previous Steam artwork restored. The replaced current file was preserved too.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Artwork restoration failed.");
+    } finally {
+      setBusy("");
+    }
+  };
   return (
     <section>
       <div className="workspace-section-heading"><div><span><Palette /></span><div><h2>Artwork Studio</h2><p>Atlas copies selected images into managed application storage and preserves replaced files in local history.</p></div></div></div>
-      <div className="workspace-safety"><ShieldCheck size={17} /> This milestone changes Atlas workspace artwork only. It does not overwrite Steam client artwork behind your back.</div>
+      <div className="workspace-safety"><ShieldCheck size={17} /> Steam artwork changes happen only after you select a local account and press Install. Existing matching files are copied into Atlas history first.</div>
+      <div className="artwork-account-picker field"><span>Steam account receiving client artwork</span><DarkSelect value={selectedSteamId} onChange={setSelectedSteamId} ariaLabel="Steam artwork account" options={accounts.map((account) => ({ value: account.steamId, label: account.personaName, detail: account.steamId }))} />{!accounts.length && <small>Run a local account scan before installing artwork into Steam.</small>}</div>
       <div className="workspace-artwork-grid">
         {definitions.map(({ kind, title, guidance }) => {
           const path = workspace.customArtwork[kind];
-          return <article key={kind}><div className={`artwork-preview ${kind}`}>{path ? <img src={localAssetUrl(path)} alt={`${title} preview`} /> : <Palette />}</div><div><span>{kind.toUpperCase()}</span><h3>{title}</h3><p>{guidance}</p><footer><button className="secondary-button" disabled={busy === kind} onClick={() => choose(kind)}><FolderOpen size={14} /> {busy === kind ? "Copying…" : path ? "Replace" : "Choose image"}</button>{path && <button className="mini-icon danger" title="Remove from workspace" onClick={() => onUpdate((current) => { const customArtwork = { ...current.customArtwork }; delete customArtwork[kind]; return { ...current, customArtwork }; })}><Trash2 size={14} /></button>}</footer></div></article>;
+          return <article key={kind}><div className={`artwork-preview ${kind}`}>{path ? <img src={localAssetUrl(path)} alt={`${title} preview`} /> : <Palette />}</div><div><span>{kind.toUpperCase()}</span><h3>{title}</h3><p>{guidance}</p><footer><button className="secondary-button" disabled={busy === kind} onClick={() => choose(kind)}><FolderOpen size={14} /> {busy === kind ? "Working…" : path ? "Replace" : "Choose image"}</button>{path && <button className="primary-button" disabled={!selectedSteamId || busy === kind} onClick={() => install(kind, path)}><Save size={14} /> Install</button>}{path && <button className="mini-icon danger" title="Remove from workspace" onClick={() => onUpdate((current) => { const customArtwork = { ...current.customArtwork }; delete customArtwork[kind]; return { ...current, customArtwork }; })}><Trash2 size={14} /></button>}</footer></div></article>;
         })}
       </div>
+      <div className="workspace-section-heading compact"><div><span><Clock3 /></span><div><h2>Steam artwork history</h2><p>Only entries with a preserved previous file can be restored.</p></div></div></div>
+      <div className="artwork-history">{workspace.artworkInstalls.map((record) => <div key={record.id}><Palette size={15} /><span><strong>{record.kind}</strong><small>{new Date(record.installedAt).toLocaleString()} · {record.steamId}</small><code>{record.targetPath}</code></span><button className="text-button" disabled={!record.backupPath || busy === record.kind} onClick={() => restore(record)}><RotateCcw size={14} /> {record.backupPath ? "Restore previous" : "No previous file"}</button></div>)}{!workspace.artworkInstalls.length && <p className="workspace-empty">No Steam-client artwork changes recorded for this game.</p>}</div>
     </section>
   );
 }
@@ -666,24 +723,47 @@ function CompatibilityWorkbench({
   platform,
   workspace,
   onUpdate,
-  onLink
+  onLink,
+  notify
 }: {
   game: Game;
   platform: PlatformInfo | null;
   workspace: GameWorkspaceData;
   onUpdate: (update: (current: GameWorkspaceData) => GameWorkspaceData) => void;
   onLink: (url: string) => void;
+  notify: (message: string) => void;
 }) {
   const platformSummary = useMemo(() => game.platforms.join(", ") || "Unknown", [game.platforms]);
+  const [storeDetails, setStoreDetails] = useState<Game>(game);
+  const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inspect = async () => {
+    setBusy(true);
+    try {
+      const [details, system] = await Promise.all([
+        bridge.getStoreApp(game.appid),
+        bridge.systemDiagnostics()
+      ]);
+      setStoreDetails({ ...game, ...details });
+      setDiagnostics(system);
+      notify("Store requirements and local system facts refreshed.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Compatibility refresh failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <section>
-      <div className="workspace-section-heading"><div><span><MonitorCog /></span><div><h2>Compatibility desk</h2><p>Local platform facts, personal observations, and authoritative external resources.</p></div></div></div>
+      <div className="workspace-section-heading"><div><span><MonitorCog /></span><div><h2>Compatibility desk</h2><p>Local platform facts, personal observations, and authoritative external resources.</p></div></div><button className="primary-button" disabled={busy} onClick={inspect}><MonitorCog size={15} /> {busy ? "Inspecting…" : "Refresh requirements"}</button></div>
       <div className="workspace-metrics">
         <Metric label="Atlas host" value={platform ? `${platform.os} · ${platform.architecture}` : "Desktop preview"} />
         <Metric label="Store platforms" value={platformSummary} />
         <Metric label="Steam Deck" value={game.deck || "Unknown"} />
         <Metric label="Install size" value={bytes(game.sizeOnDisk)} />
       </div>
+      {diagnostics && <div className="compat-system-card"><article><span>CPU</span><strong>{diagnostics.cpu}</strong></article><article><span>Memory</span><strong>{diagnostics.memoryBytes ? bytes(diagnostics.memoryBytes) : "Not exposed by this OS"}</strong></article><article><span>Session</span><strong>{diagnostics.desktopSession || "Default desktop"}</strong></article><article><span>Linux tools</span><strong>{[platform?.gamescopeAvailable && "Gamescope", platform?.mangoHudAvailable && "MangoHud"].filter(Boolean).join(" · ") || "Not detected"}</strong></article></div>}
+      <div className="requirements-grid"><article className="workspace-panel"><header><MonitorCog size={18} /><div><h2>Minimum requirements</h2><p>Publisher-provided Steam Store text, not an Atlas performance estimate.</p></div></header><pre>{storeDetails.minimumRequirements || "Refresh to request the current Steam Store requirements."}</pre></article><article className="workspace-panel"><header><CheckCircle2 size={18} /><div><h2>Recommended requirements</h2><p>Compare manually; hardware names and performance do not map reliably by string.</p></div></header><pre>{storeDetails.recommendedRequirements || "No recommended requirements were returned for this AppID."}</pre></article></div>
       <div className="workspace-grid-two">
         <article className="workspace-panel">
           <header><Gamepad2 size={18} /><div><h2>Linux / Proton</h2><p>Record the version that works best on your machine.</p></div></header>
