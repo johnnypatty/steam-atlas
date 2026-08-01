@@ -125,6 +125,16 @@ export interface PlatformInfo {
   protonRoots?: string[];
 }
 
+export interface AppSecurityInfo {
+  version: string;
+  executablePath: string;
+  executableSha256: string;
+  buildType: "debug" | "release";
+  capabilities: string[];
+  readScopes: string[];
+  networkDomains: string[];
+}
+
 export interface AccountProfile {
   steamId: string;
   personaName?: string;
