@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
   AccountProfile,
+  ArtworkInstallResult,
   BackupPreview,
   BackupRecord,
   ConfigDiff,
@@ -119,6 +120,10 @@ export const bridge = {
   compareConfigFiles: () => desktopInvoke<ConfigDiff | null>("compare_config_files"),
   chooseWorkspaceArtwork: (appId: string, kind: "grid" | "portrait" | "hero" | "logo") =>
     desktopInvoke<string | null>("choose_workspace_artwork", { appId, kind }),
+  installSteamArtwork: (appId: string, steamId: string, kind: "grid" | "portrait" | "hero" | "logo", sourcePath: string) =>
+    desktopInvoke<ArtworkInstallResult>("install_steam_artwork", { appId, steamId, kind, sourcePath }),
+  restoreSteamArtwork: (appId: string, steamId: string, kind: "grid" | "portrait" | "hero" | "logo", backupPath: string) =>
+    desktopInvoke<ArtworkInstallResult>("restore_steam_artwork", { appId, steamId, kind, backupPath }),
   scanOrphans: () => desktopInvoke<OrphanRecord[]>("scan_orphaned_game_folders"),
   analyzeCrashLog: () => desktopInvoke<CrashReport | null>("analyze_crash_log"),
   systemDiagnostics: () => desktopInvoke<SystemDiagnostics>("system_diagnostics"),
