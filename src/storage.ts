@@ -56,6 +56,9 @@ const normalizeProfile = (
   saveLocationIds: Array.isArray(value.saveLocationIds)
     ? value.saveLocationIds.filter((item): item is string => typeof item === "string").slice(0, 64)
     : [],
+  preLaunchToolIds: Array.isArray(value.preLaunchToolIds)
+    ? value.preLaunchToolIds.filter((item): item is string => typeof item === "string").slice(0, 16)
+    : [],
   createdAt: typeof value.createdAt === "string" ? value.createdAt : now(),
   lastLaunchedAt: typeof value.lastLaunchedAt === "string" ? value.lastLaunchedAt : undefined
 });
