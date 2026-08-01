@@ -2304,6 +2304,88 @@ kbd {
   color: var(--green);
 }
 
+.security-evidence-panel {
+  grid-column: 1 / -1;
+}
+
+.security-evidence {
+  display: grid;
+  gap: 14px;
+}
+
+.security-evidence > dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.security-evidence > dl > div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.015);
+  padding: 10px;
+}
+
+.security-evidence dt,
+.security-evidence > small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.security-evidence dd {
+  overflow: hidden;
+  margin: 5px 0 0;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.security-evidence dd code {
+  font-size: 7px;
+}
+
+.security-evidence > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.security-evidence article {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px;
+}
+
+.security-evidence h4 {
+  margin: 0 0 9px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 9px;
+}
+
+.security-evidence ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.security-evidence li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.security-evidence li svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
 .empty-state {
   display: flex;
   min-height: 360px;
@@ -2735,6 +2817,11 @@ kbd {
     grid-template-columns: 1fr;
   }
 
+  .security-evidence > dl,
+  .security-evidence > div {
+    grid-template-columns: 1fr;
+  }
+
   .library-summary {
     grid-template-columns: 1fr 1fr;
   }
@@ -2853,7 +2940,7 @@ kbd {
   }
 }
 
-/* Beta 0.2 appearance engine */
+/* Steam Atlas 1.0 appearance engine */
 
 html {
   color-scheme: dark;
