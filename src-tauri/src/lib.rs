@@ -507,6 +507,44 @@ fn save_user_data(app: tauri::AppHandle, json: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn export_user_data(json: String) -> Result<Option<String>, String> {
+    validate_user_data_json(&json)?;
+    let value: Value = serde_json::from_str(&json)
+        .map_err(|_| "Atlas user data is not valid JSON.".to_string())?;
+    let content = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("Could not prepare Atlas user data: {error}"))?;
+    let Some(path) = rfd::FileDialog::new()
+        .set_file_name("steam-atlas-personal-data.json")
+        .add_filter("JSON", &["json"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    fs::write(&path, content)
+        .map_err(|error| format!("Could not export Atlas user data: {error}"))?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn import_user_data() -> Result<Option<String>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Steam Atlas personal data", &["json"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Could not inspect Atlas user data: {error}"))?;
+    if metadata.len() > MAX_USER_DATA_BYTES as u64 {
+        return Err("Atlas user data exceeds the 8 MiB safety limit.".to_string());
+    }
+    let json = fs::read_to_string(path)
+        .map_err(|error| format!("Could not read Atlas user data: {error}"))?;
+    validate_user_data_json(&json)?;
+    Ok(Some(json))
+}
+
+#[tauri::command]
 fn platform_info() -> PlatformInfo {
     let roots = steam_roots();
     let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default().to_ascii_lowercase();
@@ -2331,6 +2369,8 @@ pub fn run() {
             save_secrets,
             load_user_data,
             save_user_data,
+            export_user_data,
+            import_user_data,
             detect_steam_accounts,
             fetch_account_profile_no_key,
             scan_installed_games,
