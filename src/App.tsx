@@ -9,6 +9,7 @@ import {
   BookOpen,
   Boxes,
   Check,
+  CheckCircle2,
   ChevronDown,
   CircleGauge,
   Clock3,
@@ -111,7 +112,10 @@ const defaultSettings: AppSettings = {
   density: "comfortable",
   oledMode: false,
   reduceMotion: false,
-  theme: "system"
+  highContrast: false,
+  theme: "system",
+  updateChannel: "manual",
+  onboardingComplete: false
 };
 
 const navItems: { id: Page; label: string; icon: typeof Activity }[] = [
@@ -186,6 +190,7 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [platform, setPlatform] = useState<PlatformInfo | null>(null);
+  const [onboardingOpen, setOnboardingOpen] = useState(!settings.onboardingComplete);
 
   useEffect(() => {
     if (!isDesktop()) return;
@@ -250,6 +255,7 @@ function App() {
     root.dataset.theme = resolvedTheme;
     root.dataset.oled = String(settings.oledMode && resolvedTheme === "dark");
     root.dataset.reduceMotion = String(settings.reduceMotion);
+    root.dataset.highContrast = String(settings.highContrast);
     const { steamApiKey: _steamApiKey, steamLadderApiKey: _steamLadderApiKey, ...safeSettings } = settings;
     localStorage.setItem("atlas.settings", JSON.stringify(safeSettings));
   }, [settings]);
@@ -483,6 +489,7 @@ function App() {
 
   return (
     <div className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+      <a className="skip-link" href="#atlas-content">Skip to main content</a>
       <aside className="sidebar">
         <button
           className="brand"
@@ -543,7 +550,7 @@ function App() {
         </button>
       </aside>
 
-      <main className="main">
+      <main className="main" id="atlas-content">
         <header className="topbar">
           <div className="breadcrumb">
             <span>Atlas</span>
@@ -678,9 +685,12 @@ function App() {
             <SettingsPage
               settings={settings}
               setSettings={setSettings}
+              userData={userData}
+              setUserData={setUserData}
               notify={notify}
               onLink={openLink}
               platform={platform}
+              onOpenOnboarding={() => setOnboardingOpen(true)}
             />
           )}
         </div>
@@ -756,8 +766,20 @@ function App() {
           }}
         />
       )}
+      {onboardingOpen && (
+        <Onboarding
+          platform={platform}
+          currentTheme={settings.theme}
+          onScan={syncLocal}
+          onComplete={(theme) => {
+            setSettings((current) => ({ ...current, theme, onboardingComplete: true }));
+            setOnboardingOpen(false);
+            notify("Steam Atlas setup complete.");
+          }}
+        />
+      )}
       {toast && (
-        <div className="toast">
+        <div className="toast" role="status" aria-live="polite">
           <Check size={17} />
           <span>{toast}</span>
         </div>
@@ -1952,20 +1974,27 @@ function ToolsHub({
 function SettingsPage({
   settings,
   setSettings,
+  userData,
+  setUserData,
   notify,
   onLink,
-  platform
+  platform,
+  onOpenOnboarding
 }: {
   settings: AppSettings;
   setSettings: (settings: AppSettings) => void;
+  userData: AtlasUserData;
+  setUserData: (data: AtlasUserData) => void;
   notify: (message: string) => void;
   onLink: (url: string) => void;
   platform: PlatformInfo | null;
+  onOpenOnboarding: () => void;
 }) {
   const [draft, setDraft] = useState<AppSettings>({
     ...defaultSettings,
     ...settings
   });
+  const [pendingPersonalImport, setPendingPersonalImport] = useState<AtlasUserData | null>(null);
 
   const save = async () => {
     try {
@@ -2035,6 +2064,32 @@ function SettingsPage({
       notify("Portable appearance and region settings imported.");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Import failed.");
+    }
+  };
+
+  const exportPersonalData = async () => {
+    if (!isDesktop()) {
+      notify("Personal-data export is available in the desktop build.");
+      return;
+    }
+    try {
+      const path = await bridge.exportUserData(serializeAtlasData(userData));
+      if (path) notify(`Personal workspace data exported to ${path}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Personal-data export failed.");
+    }
+  };
+
+  const previewPersonalImport = async () => {
+    if (!isDesktop()) {
+      notify("Personal-data import is available in the desktop build.");
+      return;
+    }
+    try {
+      const json = await bridge.importUserData();
+      if (json) setPendingPersonalImport(parseAtlasData(json));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Personal-data import failed.");
     }
   };
 
@@ -2419,7 +2474,35 @@ function SettingsPage({
               checked={draft.reduceMotion}
               onChange={(reduceMotion) => setDraft({ ...draft, reduceMotion })}
             />
+            <SettingToggle
+              title="High contrast"
+              detail="Strengthen borders, focus indicators and text separation."
+              checked={draft.highContrast}
+              onChange={(highContrast) => setDraft({ ...draft, highContrast })}
+            />
           </div>
+        </section>
+
+        <section className="settings-section panel">
+          <div className="settings-heading">
+            <span><RefreshCcw size={20} /></span>
+            <div><h3>Updates and setup</h3><p>Stable updates require cryptographic signing before activation.</p></div>
+          </div>
+          <div className="field">
+            <span>Update channel</span>
+            <DarkSelect
+              value={draft.updateChannel}
+              ariaLabel="Update channel"
+              onChange={(updateChannel) => setDraft({ ...draft, updateChannel: updateChannel as AppSettings["updateChannel"] })}
+              options={[
+                { value: "manual", label: "Manual", detail: "Recommended until signing is configured" },
+                { value: "stable", label: "Stable", detail: "Signed production releases only" },
+                { value: "beta", label: "Beta", detail: "Signed previews and stable releases" }
+              ]}
+            />
+          </div>
+          <div className="safe-note"><ShieldCheck size={17} /> Automatic installation remains disabled in development builds until a trusted updater public key is embedded. Atlas will never install an unsigned update.</div>
+          <button type="button" className="secondary-button" onClick={onOpenOnboarding}><Sparkles size={16} /> Run setup guide again</button>
         </section>
 
         <section className="settings-section panel privacy-panel">
@@ -2464,11 +2547,64 @@ function SettingsPage({
             >
               <CloudDownload size={16} /> Import settings
             </button>
+            <button type="button" className="secondary-button" onClick={exportPersonalData}>
+              <Archive size={16} /> Export personal data
+            </button>
+            <button type="button" className="secondary-button" onClick={previewPersonalImport}>
+              <CloudDownload size={16} /> Import personal data
+            </button>
           </div>
           <small className="privacy-note">
             Exports intentionally exclude API keys and your custom background path.
           </small>
+          {pendingPersonalImport && (
+            <div className="personal-import-review">
+              <div><ShieldCheck size={19} /><span><strong>Review personal-data import</strong><small>The current workspace database will be replaced only after confirmation.</small></span></div>
+              <dl><div><dt>Workspaces</dt><dd>{Object.keys(pendingPersonalImport.workspaces).length}</dd></div><div><dt>Sessions</dt><dd>{pendingPersonalImport.sessions.length}</dd></div><div><dt>Schema</dt><dd>Version {pendingPersonalImport.schemaVersion}</dd></div></dl>
+              <footer><button className="secondary-button" onClick={() => setPendingPersonalImport(null)}>Cancel</button><button className="primary-button" onClick={() => { setUserData(pendingPersonalImport); setPendingPersonalImport(null); notify("Personal workspace data imported and queued for atomic storage."); }}><Check size={15} /> Replace workspace data</button></footer>
+            </div>
+          )}
         </section>
+      </div>
+    </div>
+  );
+}
+
+function Onboarding({
+  platform,
+  currentTheme,
+  onScan,
+  onComplete
+}: {
+  platform: PlatformInfo | null;
+  currentTheme: AppSettings["theme"];
+  onScan: () => void;
+  onComplete: (theme: AppSettings["theme"]) => void;
+}) {
+  const [step, setStep] = useState(0);
+  const [theme, setTheme] = useState<AppSettings["theme"]>(currentTheme);
+  const [scanRequested, setScanRequested] = useState(false);
+  const steps = ["Welcome", "Local access", "Appearance", "Ready"];
+  return (
+    <div className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <div className="onboarding-card">
+        <header>
+          <span className="onboarding-logo"><AtlasLogo /></span>
+          <div><strong>STEAM ATLAS</strong><small>1.0 SETUP</small></div>
+          <ol aria-label="Setup progress">{steps.map((label, index) => <li key={label} className={index === step ? "active" : index < step ? "complete" : ""}><span>{index < step ? <Check size={12} /> : index + 1}</span><em>{label}</em></li>)}</ol>
+        </header>
+
+        <main>
+          {step === 0 && <div className="onboarding-page"><span className="onboarding-icon"><Sparkles /></span><p className="eyebrow">WELCOME TO THE ATLAS</p><h1 id="onboarding-title">One deliberate workspace for every game you own.</h1><p>Steam Atlas organizes local libraries, saves, configurations, screenshots and trusted utilities without creating a remote Atlas account.</p><div className="onboarding-principles"><article><ShieldCheck /><strong>Local first</strong><span>Personal workspace data stays on this device unless you export it.</span></article><article><KeyRound /><strong>No Steam credentials</strong><span>Passwords and Steam Guard secrets never belong in Atlas.</span></article><article><PackageCheck /><strong>Ownership respected</strong><span>Steam remains authoritative for licenses and downloads.</span></article></div></div>}
+
+          {step === 1 && <div className="onboarding-page"><span className="onboarding-icon"><HardDrive /></span><p className="eyebrow">LOCAL ACCESS</p><h1 id="onboarding-title">You decide what Atlas can touch.</h1><p>Atlas detects Steam library metadata, accounts, artwork and screenshots. Save/config folders and executables are registered only after you select them.</p><div className="onboarding-detection"><div><span>Operating system</span><strong>{platform ? `${platform.os} · ${platform.architecture}` : "Detecting…"}</strong></div><div><span>Steam installations</span><strong>{platform ? String(platform.steamRoots.length) : "—"}</strong></div><div><span>Secure credentials</span><strong>{platform?.secureStorage || "Detecting…"}</strong></div><div><span>Steam Deck</span><strong>{platform?.steamDeck ? "Detected" : "Not detected"}</strong></div></div><button className="secondary-button" onClick={() => { setScanRequested(true); onScan(); }}><RefreshCcw size={16} /> {scanRequested ? "Scan requested" : "Scan accounts and libraries now"}</button><div className="safe-note"><ShieldCheck size={17} /> Scanning is read-only. Atlas does not modify Steam files during onboarding.</div></div>}
+
+          {step === 2 && <div className="onboarding-page"><span className="onboarding-icon"><Layers3 /></span><p className="eyebrow">APPEARANCE</p><h1 id="onboarding-title">Choose the starting atmosphere.</h1><p>You can adjust every visual control later, including OLED black, opacity, backgrounds, density, scale, reduced motion and high contrast.</p><div className="onboarding-themes">{(["system", "dark", "light"] as const).map((value) => <button key={value} className={theme === value ? "active" : ""} onClick={() => setTheme(value)}><span className={`theme-preview ${value}`}><i /><i /><i /></span><strong>{value === "system" ? "Follow system" : value === "dark" ? "Atlas dark" : "Atlas light"}</strong><small>{value === "system" ? "Matches Windows or Linux" : value === "dark" ? "Focused and cinematic" : "Bright and high clarity"}</small></button>)}</div></div>}
+
+          {step === 3 && <div className="onboarding-page"><span className="onboarding-icon success"><Check /></span><p className="eyebrow">READY</p><h1 id="onboarding-title">The foundation is configured.</h1><p>Start with a local library scan, open a game workspace, and register only the save or configuration folders you recognize.</p><div className="onboarding-summary"><article><CheckCircle2 /><span><strong>Private workspace</strong><small>Versioned and stored locally</small></span></article><article><CheckCircle2 /><span><strong>Safe restore flow</strong><small>Recovery snapshot before writing</small></span></article><article><CheckCircle2 /><span><strong>Validated launching</strong><small>No unrestricted shell endpoint</small></span></article><article><CheckCircle2 /><span><strong>English interface</strong><small>Translation architecture deferred</small></span></article></div></div>}
+        </main>
+
+        <footer><button className="secondary-button" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>Back</button><span>{step + 1} of {steps.length}</span>{step < steps.length - 1 ? <button className="primary-button" onClick={() => setStep((value) => Math.min(steps.length - 1, value + 1))}>Continue <ArrowRight size={15} /></button> : <button className="primary-button" onClick={() => onComplete(theme)}><Check size={15} /> Enter Steam Atlas</button>}</footer>
       </div>
     </div>
   );
