@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
   AccountProfile,
+  AppSecurityInfo,
   ArtworkInstallResult,
   BackupPreview,
   BackupRecord,
@@ -38,6 +39,7 @@ async function desktopInvoke<T>(
 }
 
 export const bridge = {
+  appSecurityInfo: () => desktopInvoke<AppSecurityInfo>("app_security_info"),
   platformInfo: () => desktopInvoke<PlatformInfo>("platform_info"),
   loadUserData: () => desktopInvoke<string | null>("load_user_data"),
   saveUserData: (json: string) => desktopInvoke<void>("save_user_data", { json }),
