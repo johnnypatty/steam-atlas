@@ -224,7 +224,10 @@ export function GameWorkspace({
               kind="save"
               locations={workspace.saveLocations}
               backups={workspace.backups.filter((backup) => backup.kind !== "config")}
+              retentionCount={workspace.backupRetentionCount}
               onLocations={(saveLocations) => onUpdate((current) => ({ ...current, saveLocations }))}
+              onRetentionCount={(backupRetentionCount) => onUpdate((current) => ({ ...current, backupRetentionCount }))}
+              onRemoveBackups={(paths) => onUpdate((current) => ({ ...current, backups: current.backups.filter((backup) => !paths.includes(backup.backupPath)) }))}
               onBackup={(backup) => onUpdate((current) => ({ ...current, backups: [{ ...backup, appId: String(game.appid), kind: "save" as const }, ...current.backups].slice(0, 250) }))}
               notify={notify}
             />
@@ -247,7 +250,10 @@ export function GameWorkspace({
             <ConfigManager
               locations={workspace.configLocations}
               backups={workspace.backups.filter((backup) => backup.kind === "config")}
+              retentionCount={workspace.backupRetentionCount}
               onLocations={(configLocations) => onUpdate((current) => ({ ...current, configLocations }))}
+              onRetentionCount={(backupRetentionCount) => onUpdate((current) => ({ ...current, backupRetentionCount }))}
+              onRemoveBackups={(paths) => onUpdate((current) => ({ ...current, backups: current.backups.filter((backup) => !paths.includes(backup.backupPath)) }))}
               onBackup={(backup) => onUpdate((current) => ({ ...current, backups: [{ ...backup, appId: String(game.appid), kind: "config" as const }, ...current.backups].slice(0, 250) }))}
               notify={notify}
             />
@@ -281,21 +287,31 @@ function LocationWorkbench({
   kind,
   locations,
   backups,
+  retentionCount,
   onLocations,
+  onRetentionCount,
+  onRemoveBackups,
   onBackup,
   notify
 }: {
   kind: "save" | "config";
   locations: ManagedLocation[];
   backups: GameWorkspaceData["backups"];
+  retentionCount: number;
   onLocations: (locations: ManagedLocation[]) => void;
+  onRetentionCount: (count: number) => void;
+  onRemoveBackups: (paths: string[]) => void;
   onBackup: (backup: GameWorkspaceData["backups"][number]) => void;
   notify: (message: string) => void;
 }) {
   const [busy, setBusy] = useState("");
   const [preview, setPreview] = useState<BackupPreview | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
+  const [verifyBusy, setVerifyBusy] = useState("");
+  const [retentionReview, setRetentionReview] = useState(false);
+  const [pruneBusy, setPruneBusy] = useState(false);
   const noun = kind === "save" ? "save" : "configuration";
+  const excessBackups = backups.slice(retentionCount);
 
   const addLocation = async () => {
     try {
@@ -335,6 +351,20 @@ function LocationWorkbench({
     }
   };
 
+  const verifySnapshot = async (backupPath: string) => {
+    setVerifyBusy(backupPath);
+    try {
+      const result = await bridge.verifyBackupIntegrity(backupPath);
+      notify(result.status === "verified-sha256"
+        ? `Integrity verified for ${result.fileCount.toLocaleString()} files.`
+        : "This legacy snapshot predates integrity manifests. Review its source before restoring.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Snapshot verification failed.");
+    } finally {
+      setVerifyBusy("");
+    }
+  };
+
   const confirmRestore = async () => {
     if (!preview) return;
     setRestoreBusy(true);
@@ -347,6 +377,25 @@ function LocationWorkbench({
       notify(error instanceof Error ? error.message : "Restore failed.");
     } finally {
       setRestoreBusy(false);
+    }
+  };
+
+  const pruneOldSnapshots = async () => {
+    setPruneBusy(true);
+    const removed: string[] = [];
+    try {
+      for (const backup of excessBackups) {
+        await bridge.deleteBackupSnapshot(backup.backupPath);
+        removed.push(backup.backupPath);
+      }
+      onRemoveBackups(removed);
+      setRetentionReview(false);
+      notify(`${removed.length} old snapshot${removed.length === 1 ? "" : "s"} removed from the Atlas vault.`);
+    } catch (error) {
+      if (removed.length) onRemoveBackups(removed);
+      notify(error instanceof Error ? error.message : "Snapshot cleanup stopped before completion.");
+    } finally {
+      setPruneBusy(false);
     }
   };
 
@@ -372,7 +421,7 @@ function LocationWorkbench({
         {!locations.length && <div className="workspace-empty-card"><FolderOpen /><h3>No {noun} folders registered</h3><p>Atlas will never guess and modify a folder without showing it to you first.</p></div>}
       </div>
 
-      <div className="workspace-section-heading compact"><div><span><Clock3 /></span><div><h2>Snapshots</h2><p>Newest snapshots are shown first.</p></div></div></div>
+      <div className="workspace-section-heading compact"><div><span><Clock3 /></span><div><h2>Snapshots</h2><p>Newest snapshots are shown first.</p></div></div><div className="retention-controls"><label>Keep newest <input type="number" min={1} max={50} value={retentionCount} onChange={(event) => onRetentionCount(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></label><button className="secondary-button danger" disabled={!excessBackups.length} onClick={() => setRetentionReview(true)}><Trash2 size={14} /> Clean {excessBackups.length || "old"}</button></div></div>
       <div className="backup-table">
         {backups.map((backup) => {
           const destination = locations.find((item) => item.id === backup.locationId)?.path || backup.sourcePath;
@@ -380,8 +429,8 @@ function LocationWorkbench({
             <div key={backup.id + backup.backupPath}>
               <CheckCircle2 size={16} />
               <span><strong>{folderName(backup.sourcePath)}</strong><small>{new Date(/^\d+$/.test(backup.createdAt) ? Number(backup.createdAt) * 1000 : backup.createdAt).toLocaleString()}</small></span>
-              <code>{backup.fileCount.toLocaleString()} files · {bytes(backup.totalBytes)}</code>
-              <button className="text-button" onClick={() => inspectRestore(backup.backupPath, destination)}><RotateCcw size={14} /> Review restore</button>
+              <code>{backup.fileCount.toLocaleString()} files · {bytes(backup.totalBytes)} <em className={backup.integrity === "verified-sha256" ? "integrity-ok" : "integrity-legacy"}>{backup.integrity === "verified-sha256" ? "SHA-256" : "LEGACY"}</em></code>
+              <span className="backup-actions"><button className="text-button" disabled={verifyBusy === backup.backupPath} onClick={() => verifySnapshot(backup.backupPath)}><ShieldCheck size={14} /> {verifyBusy === backup.backupPath ? "Verifying…" : "Verify"}</button><button className="text-button" onClick={() => inspectRestore(backup.backupPath, destination)}><RotateCcw size={14} /> Review restore</button></span>
             </div>
           );
         })}
@@ -395,9 +444,17 @@ function LocationWorkbench({
             <div><dt>Snapshot</dt><dd>{preview.backupPath}</dd></div>
             <div><dt>Destination</dt><dd>{preview.destinationPath}</dd></div>
             <div><dt>Contents</dt><dd>{preview.fileCount.toLocaleString()} files · {bytes(preview.totalBytes)}</dd></div>
+            <div><dt>Integrity</dt><dd>{preview.integrity === "verified-sha256" ? "SHA-256 manifest verified." : "Legacy snapshot without an integrity manifest."}</dd></div>
             <div><dt>Protection</dt><dd>A recovery snapshot will be created first.</dd></div>
           </dl>
           <footer><button className="secondary-button" onClick={() => setPreview(null)}>Cancel</button><button className="primary-button" disabled={restoreBusy} onClick={confirmRestore}><RotateCcw size={15} /> {restoreBusy ? "Restoring…" : "Create recovery and restore"}</button></footer>
+        </div>
+      )}
+      {retentionReview && (
+        <div className="restore-review danger-review" role="alertdialog" aria-label="Review snapshot cleanup">
+          <div><Trash2 size={22} /><span><strong>Remove {excessBackups.length} old snapshot{excessBackups.length === 1 ? "" : "s"}?</strong><small>This deletes complete Atlas-managed snapshot folders and their integrity records. It cannot be undone.</small></span></div>
+          <dl><div><dt>Policy</dt><dd>Keep the newest {retentionCount} {noun} snapshots.</dd></div><div><dt>Oldest target</dt><dd>{excessBackups.at(-1)?.backupPath}</dd></div></dl>
+          <footer><button className="secondary-button" disabled={pruneBusy} onClick={() => setRetentionReview(false)}>Cancel</button><button className="primary-button danger" disabled={pruneBusy} onClick={pruneOldSnapshots}><Trash2 size={15} /> {pruneBusy ? "Removing…" : "Remove old snapshots"}</button></footer>
         </div>
       )}
     </section>
@@ -407,13 +464,19 @@ function LocationWorkbench({
 function ConfigManager({
   locations,
   backups,
+  retentionCount,
   onLocations,
+  onRetentionCount,
+  onRemoveBackups,
   onBackup,
   notify
 }: {
   locations: ManagedLocation[];
   backups: GameWorkspaceData["backups"];
+  retentionCount: number;
   onLocations: (locations: ManagedLocation[]) => void;
+  onRetentionCount: (count: number) => void;
+  onRemoveBackups: (paths: string[]) => void;
   onBackup: (backup: GameWorkspaceData["backups"][number]) => void;
   notify: (message: string) => void;
 }) {
@@ -439,7 +502,10 @@ function ConfigManager({
         kind="config"
         locations={locations}
         backups={backups}
+        retentionCount={retentionCount}
         onLocations={onLocations}
+        onRetentionCount={onRetentionCount}
+        onRemoveBackups={onRemoveBackups}
         onBackup={onBackup}
         notify={notify}
       />
@@ -579,6 +645,8 @@ function MediaWorkbench({
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [selectedShot, setSelectedShot] = useState<ScreenshotRecord | null>(null);
+  const [tagDraft, setTagDraft] = useState("");
   const scan = async () => {
     setBusy(true);
     try {
@@ -609,14 +677,27 @@ function MediaWorkbench({
       notify(error instanceof Error ? error.message : "Screenshot export failed.");
     }
   };
+  const addScreenshotTag = (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedShot) return;
+    const tag = tagDraft.trim().slice(0, 32);
+    if (!tag) return;
+    onUpdate((current) => {
+      const existing = current.screenshotTags[selectedShot.filePath] || [];
+      if (existing.some((item) => item.toLowerCase() === tag.toLowerCase())) return current;
+      return { ...current, screenshotTags: { ...current.screenshotTags, [selectedShot.filePath]: [...existing, tag].slice(0, 20) } };
+    });
+    setTagDraft("");
+  };
   return (
     <section>
       <div className="workspace-section-heading"><div><span><Image /></span><div><h2>Screenshot Studio</h2><p>Read-only indexing of screenshots Steam stores locally for this AppID.</p></div></div><button className="primary-button" disabled={busy} onClick={scan}><Image size={16} /> {busy ? "Scanning…" : "Scan screenshots"}</button></div>
       <div className="workspace-media-toolbar"><label className="inline-search"><Image size={15} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter file names" /></label><button className={`secondary-button ${favoriteOnly ? "active" : ""}`} onClick={() => setFavoriteOnly((value) => !value)}><Heart size={15} fill={favoriteOnly ? "currentColor" : "none"} /> Favorites</button></div>
       <div className="workspace-media-grid">
-        {shown.map((shot) => <article key={shot.filePath}><div className="workspace-shot"><img src={shot.previewDataUrl} alt={shot.fileName} /><button className={workspace.screenshotFavorites.includes(shot.filePath) ? "active" : ""} onClick={() => toggleFavorite(shot.filePath)} aria-label="Toggle screenshot favorite"><Heart size={15} fill={workspace.screenshotFavorites.includes(shot.filePath) ? "currentColor" : "none"} /></button></div><div><strong>{shot.fileName}</strong><small>{bytes(shot.size)} · {new Date(Number(shot.modifiedAt) * 1000).toLocaleString()}</small><span><button className="text-button" onClick={() => bridge.revealPath(shot.filePath).catch((error) => notify(String(error)))}>Show <ExternalLink size={13} /></button><button className="text-button" onClick={() => exportShot(shot)}>Export <Save size={13} /></button></span></div></article>)}
+        {shown.map((shot) => <article key={shot.filePath}><div className="workspace-shot"><button className="shot-open" onClick={() => setSelectedShot(shot)} aria-label={`Open ${shot.fileName}`}><img src={shot.previewDataUrl} alt={shot.fileName} /></button><button className={workspace.screenshotFavorites.includes(shot.filePath) ? "active" : ""} onClick={() => toggleFavorite(shot.filePath)} aria-label="Toggle screenshot favorite"><Heart size={15} fill={workspace.screenshotFavorites.includes(shot.filePath) ? "currentColor" : "none"} /></button></div><div><strong>{shot.fileName}</strong><small>{bytes(shot.size)} · {new Date(Number(shot.modifiedAt) * 1000).toLocaleString()}</small><div className="shot-tags">{(workspace.screenshotTags[shot.filePath] || []).slice(0, 3).map((tag) => <em key={tag}>{tag}</em>)}</div><span><button className="text-button" onClick={() => bridge.revealPath(shot.filePath).catch((error) => notify(String(error)))}>Show <ExternalLink size={13} /></button><button className="text-button" onClick={() => exportShot(shot)}>Export <Save size={13} /></button></span></div></article>)}
         {!shown.length && <div className="workspace-empty-card"><Image /><h3>No screenshots to show</h3><p>Run a local scan or change the active filters. Nothing is uploaded.</p></div>}
       </div>
+      {selectedShot && <div className="shot-viewer" role="dialog" aria-modal="true" aria-label={selectedShot.fileName} onMouseDown={() => setSelectedShot(null)}><div onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={() => setSelectedShot(null)}>×</button><img src={selectedShot.previewDataUrl} alt={selectedShot.fileName} /><aside><p className="eyebrow">SCREENSHOT DETAILS</p><h3>{selectedShot.fileName}</h3><code>{selectedShot.filePath}</code><dl><div><dt>Size</dt><dd>{bytes(selectedShot.size)}</dd></div><div><dt>Captured</dt><dd>{new Date(Number(selectedShot.modifiedAt) * 1000).toLocaleString()}</dd></div></dl><form className="tag-editor" onSubmit={addScreenshotTag}><input value={tagDraft} maxLength={32} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add a private tag" /><button className="secondary-button"><Plus size={14} /> Add</button></form><div className="workspace-tags">{(workspace.screenshotTags[selectedShot.filePath] || []).map((tag) => <button key={tag} onClick={() => onUpdate((current) => ({ ...current, screenshotTags: { ...current.screenshotTags, [selectedShot.filePath]: (current.screenshotTags[selectedShot.filePath] || []).filter((item) => item !== tag) } }))}>{tag} <span>×</span></button>)}</div><footer><button className="secondary-button" onClick={() => toggleFavorite(selectedShot.filePath)}><Heart size={14} fill={workspace.screenshotFavorites.includes(selectedShot.filePath) ? "currentColor" : "none"} /> Favorite</button><button className="primary-button" onClick={() => exportShot(selectedShot)}><Save size={14} /> Export copy</button></footer><small>Export currently copies the original image bytes. Atlas does not claim that third-party metadata has been removed.</small></aside></div></div>}
     </section>
   );
 }
