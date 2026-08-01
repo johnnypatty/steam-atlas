@@ -1,4 +1,4 @@
-# Steam Atlas Beta 0.2
+# Steam Atlas 1.0 development
 
 <p align="center">
   <img src="assets/steam-atlas-logo.svg" width="112" alt="Steam Atlas Atlas Node logo" />
@@ -9,12 +9,27 @@ Tauri 2, Rust, React and TypeScript. It unifies store discovery, legitimate
 local-library intelligence, account display data, manifest inspection, backups,
 trusted-tool launching and a twenty-workbench Power Suite.
 
-> Beta software. Keep independent backups of important data. Steam Atlas is not
+> The `agent/v1-game-workspaces` branch is an in-progress 1.0 release candidate,
+> not a stable release. Keep independent backups of important data. Steam Atlas is not
 > affiliated with Valve, SteamDB, Steam Ladder, ProtonDB or Kaspersky.
 
 ![Steam Atlas overview](steam-atlas-preview.png)
 
-## Why Beta 0.2 matters
+## What 1.0 adds
+
+- Per-game workspaces with private notes, ratings, tags, favorites, backlog
+  state, save/config locations, launch profiles and local session history.
+- Save Vault snapshots with SHA-256 integrity manifests, restore previews,
+  mandatory recovery snapshots and explicit retention cleanup.
+- Screenshot Studio with exact-AppID indexing, favorites, private tags,
+  fullscreen review and honest byte-for-byte export labeling.
+- Configuration comparison, reversible Steam client artwork, publisher system
+  requirements and Linux/Proton/Steam Deck compatibility details.
+- English onboarding, atomic personal-data storage/import/export, dashboard
+  module selection, high contrast, reduced motion and Steam Deck/TV mode.
+- First-launch trust review for tools and game-aware `Ctrl+K` navigation.
+
+## Beta 0.2 foundation
 
 - Windows 10/11 and Linux support, including native, Flatpak and secondary
   Steam libraries plus Proton-aware diagnostics.
@@ -60,9 +75,9 @@ paid content; modify achievements; or automatically delete detected folders.
 4. Update Intelligence — local BuildIDs with external history links.
 5. Library Analytics — platform and disk-footprint summaries.
 6. Backlog Board — Backlog, Playing, Completed and Paused lists.
-7. Screenshot Studio — read-only indexing of recent Steam screenshots.
+7. Screenshot Studio — exact-game indexing, favorites, private tags and export.
 8. Achievement Lens — read-only public progress pages.
-9. Compatibility Desk — local platform hints and ProtonDB links.
+9. Compatibility Desk — system requirements, Deck/Proton facts and ProtonDB links.
 10. Orphan Scanner — preview-only detection; no deletion endpoint.
 11. Duplicate Analyzer — repeated title and install-path detection.
 12. Mod Command Center — local AppID associations and Tools Hub integration.
@@ -145,10 +160,14 @@ scan folders, access the credential vault, create backups or launch programs.
 - Executables are canonicalized, extension-checked and launched only after
   explicit selection. Arguments remain an array and are bounded.
 - Backgrounds, manifests, logs and network responses have size limits.
-- Backup recursion skips symbolic links. Orphan results are previews only.
+- Backup recursion skips symbolic links. New snapshots carry SHA-256 manifests;
+  restore verifies them and creates a recovery snapshot first.
+- Snapshot cleanup requires confirmation and is restricted to complete
+  top-level folders in the Atlas-managed vault. Orphan results remain previews.
 
-Review [SECURITY.md](SECURITY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
-before extending native capabilities.
+Review [SECURITY.md](SECURITY.md), [PRIVACY.md](PRIVACY.md),
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before extending native capabilities.
 
 ## Project map
 
@@ -163,6 +182,12 @@ before extending native capabilities.
 | `.github/workflows/` | Windows/Linux build, security and release automation |
 | `CUSTOMIZATION.md` | Branding and appearance guide |
 | `CONTRIBUTING.md` | Contribution and validation rules |
+
+Release engineering references:
+
+- [Beta-to-1.0 migration](docs/MIGRATION.md)
+- [Updater and publisher signing](docs/UPDATER_SIGNING.md)
+- [1.0 qualification checklist](docs/RELEASE_CHECKLIST.md)
 
 ## Antivirus notes
 
