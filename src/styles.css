@@ -4642,6 +4642,58 @@ html[data-reduce-motion="true"] *::after {
   align-items: center;
 }
 
+.profile-tool-picker {
+  grid-column: 1 / -1;
+}
+
+.profile-tool-picker > span {
+  color: var(--soft);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.profile-tool-picker > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.profile-tool-picker label {
+  display: flex;
+  min-width: 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px;
+}
+
+.profile-tool-picker input {
+  width: auto;
+}
+
+.profile-tool-picker label span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.profile-tool-picker strong,
+.profile-tool-picker small {
+  overflow: hidden;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-tool-picker small {
+  color: var(--muted);
+  font-size: 7px;
+}
+
 .check-row input {
   width: auto;
 }
@@ -5088,6 +5140,49 @@ html[data-reduce-motion="true"] *::after {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+.trust-modal {
+  width: min(620px, calc(100% - 30px));
+}
+
+.trust-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 18px 0;
+}
+
+.trust-details > div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 10px;
+}
+
+.trust-details dt {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.trust-details dd {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  font-size: 8px;
+}
+
+.trust-details code {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--soft);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .personal-import-review > div > svg {
@@ -5541,6 +5636,14 @@ html[data-reduce-motion="true"] *::after {
 
   .launch-profile-form .launch-arguments {
     grid-column: auto;
+  }
+
+  .profile-tool-picker {
+    grid-column: auto;
+  }
+
+  .profile-tool-picker > div {
+    grid-template-columns: 1fr;
   }
 
   .location-list > article {
