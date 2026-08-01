@@ -98,7 +98,10 @@ export interface AppSettings {
   density: "compact" | "comfortable" | "spacious";
   oledMode: boolean;
   reduceMotion: boolean;
+  highContrast: boolean;
   theme: "system" | "dark" | "light";
+  updateChannel: "stable" | "beta" | "manual";
+  onboardingComplete: boolean;
 }
 
 export interface PlatformInfo {
