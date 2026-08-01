@@ -3,7 +3,7 @@ name: Desktop build
 on:
   workflow_dispatch:
   push:
-    branches: [main, agent/beta-0.2]
+    branches: [main, agent/beta-0.2, agent/v1-game-workspaces]
     tags: ["v*"]
   pull_request:
 
@@ -89,8 +89,19 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: Generate Rust lockfile
+        run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Lint native core
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
       - name: Test native core
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Upload generated Cargo lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: steam-atlas-cargo-lock
+          path: src-tauri/Cargo.lock
       - name: Build Linux application
         run: npm run desktop:linux
       - name: Upload Linux artifacts
