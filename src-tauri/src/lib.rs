@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::{
     collections::HashSet,
     fs,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -18,6 +18,7 @@ use url::Url;
 
 const MAX_LOCAL_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_USER_DATA_BYTES: usize = 8 * 1024 * 1024;
 const SECRET_SERVICE: &str = "app.steamatlas.desktop";
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +38,11 @@ struct PlatformInfo {
     flatpak_steam: bool,
     secure_storage: String,
     package_formats: Vec<String>,
+    steam_deck: bool,
+    desktop_session: String,
+    gamescope_available: bool,
+    mango_hud_available: bool,
+    proton_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +123,24 @@ struct BackupRecord {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BackupPreview {
+    backup_path: String,
+    destination_path: String,
+    file_count: u64,
+    total_bytes: u64,
+    recovery_will_be_created: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreResult {
+    restored_file_count: u64,
+    restored_bytes: u64,
+    recovery_backup: BackupRecord,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ScreenshotRecord {
     id: String,
     app_id: String,
@@ -144,6 +168,42 @@ struct CrashReport {
     summary: String,
     suggestions: Vec<String>,
     excerpt: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemDiagnostics {
+    app_version: String,
+    os: String,
+    architecture: String,
+    cpu: String,
+    memory_bytes: Option<u64>,
+    steam_roots: Vec<String>,
+    flatpak_steam: bool,
+    steam_deck: bool,
+    desktop_session: String,
+    secure_storage: String,
+    package_formats: Vec<String>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigDiffLine {
+    line: usize,
+    before: Option<String>,
+    after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigDiff {
+    before_path: String,
+    after_path: String,
+    before_lines: usize,
+    after_lines: usize,
+    truncated: bool,
+    changes: Vec<ConfigDiffLine>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -339,9 +399,133 @@ fn save_secrets(steam_api_key: String, steam_ladder_api_key: String) -> Result<(
     write_secret("steam-ladder-api", &steam_ladder_api_key)
 }
 
+fn user_data_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve Atlas data directory: {error}"))?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Could not create Atlas data directory: {error}"))?;
+    Ok((
+        directory.join("user-data.json"),
+        directory.join("user-data.backup.json"),
+        directory.join("user-data.tmp.json"),
+    ))
+}
+
+fn validate_user_data_json(json: &str) -> Result<(), String> {
+    if json.len() > MAX_USER_DATA_BYTES {
+        return Err("Atlas user data exceeds the 8 MiB safety limit.".to_string());
+    }
+    let value: Value = serde_json::from_str(json)
+        .map_err(|_| "Atlas user data is not valid JSON.".to_string())?;
+    let object = value
+        .as_object()
+        .ok_or("Atlas user data must be a JSON object.")?;
+    let schema = object
+        .get("schemaVersion")
+        .and_then(Value::as_u64)
+        .ok_or("Atlas user data is missing a valid schema version.")?;
+    if schema == 0 || schema > 100 {
+        return Err("Atlas user data uses an unsupported schema version.".to_string());
+    }
+    if !object.get("workspaces").is_some_and(Value::is_object)
+        || !object.get("sessions").is_some_and(Value::is_array)
+    {
+        return Err("Atlas user data has an invalid structure.".to_string());
+    }
+    for forbidden in ["steamApiKey", "steamLadderApiKey", "password", "accessToken"] {
+        if object.contains_key(forbidden) {
+            return Err("Sensitive credentials cannot be stored in Atlas user data.".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn read_valid_user_data(path: &Path) -> Result<Option<String>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Could not inspect Atlas user data: {error}"))?;
+    if metadata.len() > MAX_USER_DATA_BYTES as u64 {
+        return Err("Atlas user data exceeds the 8 MiB safety limit.".to_string());
+    }
+    let json = fs::read_to_string(path)
+        .map_err(|error| format!("Could not read Atlas user data: {error}"))?;
+    validate_user_data_json(&json)?;
+    Ok(Some(json))
+}
+
+#[tauri::command]
+fn load_user_data(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let (primary, backup, _) = user_data_paths(&app)?;
+    match read_valid_user_data(&primary) {
+        Ok(Some(json)) => Ok(Some(json)),
+        Ok(None) => read_valid_user_data(&backup),
+        Err(primary_error) => match read_valid_user_data(&backup) {
+            Ok(Some(json)) => Ok(Some(json)),
+            Ok(None) => Err(format!(
+                "Primary user data is invalid ({primary_error}) and no recovery copy exists."
+            )),
+            Err(backup_error) => Err(format!(
+                "Primary user data is invalid ({primary_error}); recovery copy is also invalid ({backup_error})."
+            )),
+        },
+    }
+}
+
+#[tauri::command]
+fn save_user_data(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    validate_user_data_json(&json)?;
+    let (primary, backup, temporary) = user_data_paths(&app)?;
+    if temporary.exists() {
+        fs::remove_file(&temporary)
+            .map_err(|error| format!("Could not clear an interrupted Atlas save: {error}"))?;
+    }
+    let mut file = fs::File::create(&temporary)
+        .map_err(|error| format!("Could not prepare Atlas user data: {error}"))?;
+    file.write_all(json.as_bytes())
+        .map_err(|error| format!("Could not write Atlas user data: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("Could not finalize Atlas user data: {error}"))?;
+    drop(file);
+
+    if primary.is_file() {
+        fs::copy(&primary, &backup)
+            .map_err(|error| format!("Could not create the previous-data recovery copy: {error}"))?;
+        fs::remove_file(&primary)
+            .map_err(|error| format!("Could not rotate Atlas user data: {error}"))?;
+    }
+    if let Err(error) = fs::rename(&temporary, &primary) {
+        if backup.is_file() {
+            let _ = fs::copy(&backup, &primary);
+        }
+        return Err(format!("Could not atomically publish Atlas user data: {error}"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn platform_info() -> PlatformInfo {
     let roots = steam_roots();
+    let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default().to_ascii_lowercase();
+    let steam_deck = cfg!(target_os = "linux")
+        && (os_release.contains("steamos")
+            || os_release.contains("steam deck")
+            || std::env::var("SteamDeck").is_ok());
+    let proton_roots = roots
+        .iter()
+        .flat_map(|root| {
+            [
+                root.join("compatibilitytools.d"),
+                root.join("steamapps/common"),
+                root.join("steamapps/compatdata"),
+            ]
+        })
+        .filter(|path| path.is_dir())
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
     PlatformInfo {
         os: std::env::consts::OS.to_string(),
         architecture: std::env::consts::ARCH.to_string(),
@@ -362,7 +546,29 @@ fn platform_info() -> PlatformInfo {
         } else {
             vec!["AppImage".to_string(), "DEB".to_string()]
         },
+        steam_deck,
+        desktop_session: std::env::var("XDG_CURRENT_DESKTOP")
+            .or_else(|_| std::env::var("DESKTOP_SESSION"))
+            .unwrap_or_default(),
+        gamescope_available: command_available("gamescope"),
+        mango_hud_available: command_available("mangohud"),
+        proton_roots,
     }
+}
+
+fn command_available(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        let direct = directory.join(name);
+        if direct.is_file() {
+            return true;
+        }
+        cfg!(target_os = "windows") && ["exe", "cmd", "bat"]
+            .iter()
+            .any(|extension| directory.join(format!("{name}.{extension}")).is_file())
+    })
 }
 
 fn xml_value(content: &str, tag: &str) -> Option<String> {
@@ -907,6 +1113,89 @@ fn copy_folder_recursive(source: &Path, destination: &Path) -> Result<(u64, u64)
     Ok((file_count, total_bytes))
 }
 
+fn inspect_folder_recursive(source: &Path, remaining: &mut usize) -> Result<(u64, u64), String> {
+    if *remaining == 0 {
+        return Err("The folder exceeds Atlas's 200,000-file safety limit.".to_string());
+    }
+    let mut file_count = 0_u64;
+    let mut total_bytes = 0_u64;
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        if *remaining == 0 {
+            return Err("The folder exceeds Atlas's 200,000-file safety limit.".to_string());
+        }
+        *remaining -= 1;
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            let (nested_count, nested_bytes) = inspect_folder_recursive(&entry.path(), remaining)?;
+            file_count = file_count.saturating_add(nested_count);
+            total_bytes = total_bytes.saturating_add(nested_bytes);
+        } else if file_type.is_file() {
+            file_count = file_count.saturating_add(1);
+            total_bytes = total_bytes.saturating_add(entry.metadata().map(|value| value.len()).unwrap_or(0));
+            if total_bytes > 50 * 1024 * 1024 * 1024 {
+                return Err("The folder exceeds Atlas's 50 GiB backup safety limit.".to_string());
+            }
+        }
+    }
+    Ok((file_count, total_bytes))
+}
+
+fn backup_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve Atlas data directory: {error}"))?
+        .join("backups");
+    fs::create_dir_all(&root)
+        .map_err(|error| format!("Could not create the backup vault: {error}"))?;
+    root.canonicalize()
+        .map_err(|error| format!("Could not validate the backup vault: {error}"))
+}
+
+fn safe_folder_name(path: &Path, fallback: &str) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(fallback)
+        .replace(
+            |value: char| !value.is_ascii_alphanumeric() && value != '-' && value != '_',
+            "_",
+        )
+}
+
+fn unique_backup_destination(root: &Path, name: &str) -> PathBuf {
+    let timestamp = unix_timestamp();
+    for suffix in 0..10_000_u32 {
+        let candidate = if suffix == 0 {
+            root.join(format!("{name}-{timestamp}"))
+        } else {
+            root.join(format!("{name}-{timestamp}-{suffix}"))
+        };
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    root.join(format!("{name}-{timestamp}-overflow"))
+}
+
+fn validated_backup_path(app: &tauri::AppHandle, value: &str) -> Result<PathBuf, String> {
+    let root = backup_root(app)?;
+    let path = PathBuf::from(value);
+    if !path.is_dir() {
+        return Err("The selected snapshot no longer exists.".to_string());
+    }
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the snapshot: {error}"))?;
+    if path == root || !path.starts_with(&root) {
+        return Err("Atlas only restores snapshots from its protected backup vault.".to_string());
+    }
+    Ok(path)
+}
+
 #[tauri::command]
 fn backup_folder(app: tauri::AppHandle, source_path: String) -> Result<BackupRecord, String> {
     let source = PathBuf::from(&source_path);
@@ -914,18 +1203,18 @@ fn backup_folder(app: tauri::AppHandle, source_path: String) -> Result<BackupRec
         return Err("The selected backup source is not a folder.".to_string());
     }
     let timestamp = unix_timestamp();
-    let safe_name = source
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("backup")
-        .replace(|value: char| !value.is_ascii_alphanumeric() && value != '-' && value != '_', "_");
-    let destination = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("backups")
-        .join(format!("{safe_name}-{timestamp}"));
-    let (file_count, total_bytes) = copy_folder_recursive(&source, &destination)?;
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the backup source: {error}"))?;
+    let root = backup_root(&app)?;
+    if canonical_source.starts_with(&root) {
+        return Err("A backup source cannot be inside Atlas's own backup vault.".to_string());
+    }
+    let mut remaining = 200_000_usize;
+    inspect_folder_recursive(&canonical_source, &mut remaining)?;
+    let safe_name = safe_folder_name(&source, "backup");
+    let destination = unique_backup_destination(&root, &safe_name);
+    let (file_count, total_bytes) = copy_folder_recursive(&canonical_source, &destination)?;
     Ok(BackupRecord {
         id: format!("backup-{timestamp}"),
         source_path,
@@ -933,6 +1222,66 @@ fn backup_folder(app: tauri::AppHandle, source_path: String) -> Result<BackupRec
         created_at: timestamp.to_string(),
         file_count,
         total_bytes,
+    })
+}
+
+#[tauri::command]
+fn preview_backup_restore(
+    app: tauri::AppHandle,
+    backup_path: String,
+    destination_path: String,
+) -> Result<BackupPreview, String> {
+    let backup = validated_backup_path(&app, &backup_path)?;
+    let destination = PathBuf::from(&destination_path);
+    if !destination.is_dir() {
+        return Err("The restore destination is not an existing folder.".to_string());
+    }
+    let destination = destination
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the restore destination: {error}"))?;
+    let root = backup_root(&app)?;
+    if destination.starts_with(&root) || backup.starts_with(&destination) || destination.starts_with(&backup) {
+        return Err("The snapshot and restore destination must be separate folders.".to_string());
+    }
+    let mut remaining = 200_000_usize;
+    let (file_count, total_bytes) = inspect_folder_recursive(&backup, &mut remaining)?;
+    Ok(BackupPreview {
+        backup_path: backup.to_string_lossy().to_string(),
+        destination_path: destination.to_string_lossy().to_string(),
+        file_count,
+        total_bytes,
+        recovery_will_be_created: true,
+    })
+}
+
+#[tauri::command]
+fn restore_backup(
+    app: tauri::AppHandle,
+    backup_path: String,
+    destination_path: String,
+) -> Result<RestoreResult, String> {
+    let preview = preview_backup_restore(app.clone(), backup_path, destination_path)?;
+    let backup = PathBuf::from(&preview.backup_path);
+    let destination = PathBuf::from(&preview.destination_path);
+    let root = backup_root(&app)?;
+    let recovery_name = format!("recovery-{}", safe_folder_name(&destination, "restore"));
+    let recovery_path = unique_backup_destination(&root, &recovery_name);
+    let created_at = unix_timestamp();
+    let (recovery_files, recovery_bytes) = copy_folder_recursive(&destination, &recovery_path)?;
+    let recovery_backup = BackupRecord {
+        id: format!("recovery-{created_at}"),
+        source_path: destination.to_string_lossy().to_string(),
+        backup_path: recovery_path.to_string_lossy().to_string(),
+        created_at: created_at.to_string(),
+        file_count: recovery_files,
+        total_bytes: recovery_bytes,
+    };
+    let (restored_file_count, restored_bytes) = copy_folder_recursive(&backup, &destination)
+        .map_err(|error| format!("Restore stopped after creating a recovery snapshot: {error}"))?;
+    Ok(RestoreResult {
+        restored_file_count,
+        restored_bytes,
+        recovery_backup,
     })
 }
 
@@ -1040,6 +1389,251 @@ fn scan_steam_screenshots() -> Result<Vec<ScreenshotRecord>, String> {
         .collect())
 }
 
+#[tauri::command]
+fn scan_game_screenshots(app_id: String) -> Result<Vec<ScreenshotRecord>, String> {
+    if app_id.is_empty() || app_id.len() > 20 || !app_id.chars().all(|value| value.is_ascii_digit()) {
+        return Err("The screenshot AppID must contain digits only.".to_string());
+    }
+    let mut paths = Vec::new();
+    for root in steam_roots() {
+        let userdata = root.join("userdata");
+        let Ok(users) = fs::read_dir(userdata) else {
+            continue;
+        };
+        for user in users.flatten().filter(|entry| entry.path().is_dir()) {
+            let screenshots = user
+                .path()
+                .join("760/remote")
+                .join(&app_id)
+                .join("screenshots");
+            if screenshots.is_dir() {
+                visit_files(
+                    &screenshots,
+                    2,
+                    &mut paths,
+                    &["jpg", "jpeg", "png", "webp"],
+                    500,
+                );
+            }
+        }
+    }
+    paths.sort_by_key(|path| {
+        std::cmp::Reverse(
+            fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok(),
+        )
+    });
+    paths.truncate(120);
+    Ok(paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = fs::metadata(&path).ok()?;
+            if metadata.len() > 8 * 1024 * 1024 {
+                return None;
+            }
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+                .map(|value| value.as_secs().to_string())
+                .unwrap_or_default();
+            Some(ScreenshotRecord {
+                id: format!("shot-{}-{modified}", metadata.len()),
+                app_id: app_id.clone(),
+                file_name: path.file_name()?.to_string_lossy().to_string(),
+                file_path: path.to_string_lossy().to_string(),
+                preview_data_url: data_url_for_file(&path)?,
+                size: metadata.len(),
+                modified_at: modified,
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn export_screenshot(path: String) -> Result<Option<String>, String> {
+    let source = PathBuf::from(&path);
+    if !source.is_file() {
+        return Err("The selected screenshot no longer exists.".to_string());
+    }
+    let source = source
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the screenshot: {error}"))?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !["jpg", "jpeg", "png", "webp"].contains(&extension.as_str()) {
+        return Err("Atlas only exports supported image files.".to_string());
+    }
+    let inside_steam_screenshots = steam_roots().into_iter().any(|root| {
+        root.canonicalize().ok().is_some_and(|root| {
+            source.starts_with(root)
+                && source.components().any(|part| {
+                    part.as_os_str().to_string_lossy().eq_ignore_ascii_case("screenshots")
+                })
+        })
+    });
+    if !inside_steam_screenshots {
+        return Err("Atlas only exports screenshots from detected Steam libraries.".to_string());
+    }
+    if fs::metadata(&source).map(|value| value.len()).unwrap_or(u64::MAX) > MAX_LOCAL_IMAGE_BYTES {
+        return Err("The screenshot exceeds Atlas's 12 MiB export limit.".to_string());
+    }
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("steam-screenshot.png");
+    let Some(destination) = rfd::FileDialog::new()
+        .set_file_name(file_name)
+        .add_filter("Image", &[extension.as_str()])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    fs::copy(&source, &destination)
+        .map_err(|error| format!("Could not export the screenshot: {error}"))?;
+    Ok(Some(destination.to_string_lossy().to_string()))
+}
+
+fn read_config_text(path: &Path) -> Result<String, String> {
+    const CONFIG_EXTENSIONS: &[&str] = &["cfg", "conf", "ini", "json", "toml", "txt", "vdf", "xml", "yaml", "yml"];
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !CONFIG_EXTENSIONS.contains(&extension.as_str()) {
+        return Err("Select a supported text configuration file.".to_string());
+    }
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Could not inspect the configuration file: {error}"))?;
+    if metadata.len() > 2 * 1024 * 1024 {
+        return Err("Configuration files must be 2 MiB or smaller.".to_string());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|_| "The configuration file is not valid UTF-8 text.".to_string())?;
+    if content.contains('\0') {
+        return Err("Binary configuration files cannot be compared as text.".to_string());
+    }
+    Ok(content)
+}
+
+#[tauri::command]
+fn compare_config_files() -> Result<Option<ConfigDiff>, String> {
+    let files = rfd::FileDialog::new()
+        .add_filter(
+            "Text configuration files",
+            &["cfg", "conf", "ini", "json", "toml", "txt", "vdf", "xml", "yaml", "yml"],
+        )
+        .pick_files()
+        .unwrap_or_default();
+    if files.is_empty() {
+        return Ok(None);
+    }
+    if files.len() != 2 {
+        return Err("Select exactly two configuration files to compare.".to_string());
+    }
+    let before_path = files[0]
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the first configuration: {error}"))?;
+    let after_path = files[1]
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the second configuration: {error}"))?;
+    if before_path == after_path {
+        return Err("Select two different configuration files.".to_string());
+    }
+    let before = read_config_text(&before_path)?;
+    let after = read_config_text(&after_path)?;
+    let before_lines = before.lines().collect::<Vec<_>>();
+    let after_lines = after.lines().collect::<Vec<_>>();
+    let max_lines = before_lines.len().max(after_lines.len());
+    let mut changes = Vec::new();
+    let mut truncated = false;
+    for index in 0..max_lines {
+        let left = before_lines.get(index).copied();
+        let right = after_lines.get(index).copied();
+        if left == right {
+            continue;
+        }
+        if changes.len() == 500 {
+            truncated = true;
+            break;
+        }
+        changes.push(ConfigDiffLine {
+            line: index + 1,
+            before: left.map(|value| value.chars().take(2_000).collect()),
+            after: right.map(|value| value.chars().take(2_000).collect()),
+        });
+    }
+    Ok(Some(ConfigDiff {
+        before_path: before_path.to_string_lossy().to_string(),
+        after_path: after_path.to_string_lossy().to_string(),
+        before_lines: before_lines.len(),
+        after_lines: after_lines.len(),
+        truncated,
+        changes,
+    }))
+}
+
+#[tauri::command]
+fn choose_workspace_artwork(
+    app: tauri::AppHandle,
+    app_id: String,
+    kind: String,
+) -> Result<Option<String>, String> {
+    if app_id.is_empty() || app_id.len() > 20 || !app_id.chars().all(|value| value.is_ascii_digit()) {
+        return Err("The artwork AppID must contain digits only.".to_string());
+    }
+    if !["grid", "portrait", "hero", "logo"].contains(&kind.as_str()) {
+        return Err("Unsupported artwork type.".to_string());
+    }
+    let Some(source) = rfd::FileDialog::new()
+        .add_filter("Artwork images", &["jpg", "jpeg", "png", "webp"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let metadata = fs::metadata(&source)
+        .map_err(|error| format!("Could not inspect the artwork: {error}"))?;
+    if metadata.len() > MAX_LOCAL_IMAGE_BYTES {
+        return Err("Artwork must be 12 MiB or smaller.".to_string());
+    }
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not resolve Atlas data directory: {error}"))?
+        .join("workspace-artwork")
+        .join(&app_id);
+    let history = directory.join("history");
+    fs::create_dir_all(&history)
+        .map_err(|error| format!("Could not create the artwork history: {error}"))?;
+    if let Ok(entries) = fs::read_dir(&directory) {
+        for entry in entries.flatten().filter(|entry| entry.path().is_file()) {
+            let path = entry.path();
+            if path.file_stem().and_then(|value| value.to_str()) == Some(kind.as_str()) {
+                let old_extension = path.extension().and_then(|value| value.to_str()).unwrap_or("png");
+                let backup = history.join(format!("{kind}-{}.{}", unix_timestamp(), old_extension));
+                fs::copy(&path, backup)
+                    .map_err(|error| format!("Could not preserve the previous artwork: {error}"))?;
+                fs::remove_file(path)
+                    .map_err(|error| format!("Could not rotate the previous artwork: {error}"))?;
+            }
+        }
+    }
+    let destination = directory.join(format!("{kind}.{extension}"));
+    fs::copy(source, &destination)
+        .map_err(|error| format!("Could not copy the selected artwork: {error}"))?;
+    Ok(Some(destination.to_string_lossy().to_string()))
+}
+
 fn folder_size_limited(path: &Path, remaining: &mut usize) -> u64 {
     if *remaining == 0 {
         return 0;
@@ -1123,7 +1717,7 @@ fn analyze_crash_log() -> Result<Option<CrashReport>, String> {
         == Some(true)
     {
         return Ok(Some(CrashReport {
-            file_path: path.to_string_lossy().to_string(),
+            file_path: redact_sensitive_text(&path.to_string_lossy()),
             category: "Binary crash dump".to_string(),
             confidence: "medium".to_string(),
             summary: "This is a binary dump. Atlas can identify it but cannot safely decode it yet."
@@ -1200,7 +1794,7 @@ fn analyze_crash_log() -> Result<Option<CrashReport>, String> {
             ],
         )
     };
-    let excerpt = content
+    let excerpt = redact_sensitive_text(&content
         .lines()
         .rev()
         .take(100)
@@ -1208,15 +1802,140 @@ fn analyze_crash_log() -> Result<Option<CrashReport>, String> {
         .into_iter()
         .rev()
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n"));
     Ok(Some(CrashReport {
-        file_path: path.to_string_lossy().to_string(),
+        file_path: redact_sensitive_text(&path.to_string_lossy()),
         category: category.to_string(),
         confidence: confidence.to_string(),
         summary: summary.to_string(),
         suggestions,
         excerpt,
     }))
+}
+
+fn redact_sensitive_text(input: &str) -> String {
+    let mut output = input.to_string();
+    if let Some(home) = dirs::home_dir() {
+        let home = home.to_string_lossy();
+        if !home.is_empty() {
+            output = output.replace(home.as_ref(), "[HOME]");
+        }
+    }
+    for (pattern, replacement) in [
+        (r"\b7656119\d{10}\b", "[STEAM_ID]"),
+        (r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[EMAIL]"),
+        (r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "[IP_ADDRESS]"),
+        (r"(?i)(api[_ -]?key|access[_ -]?token|password)\s*[:=]\s*[^\s,;]+", "$1=[REDACTED]"),
+    ] {
+        if let Ok(regex) = Regex::new(pattern) {
+            output = regex.replace_all(&output, replacement).into_owned();
+        }
+    }
+    output
+}
+
+fn linux_memory_bytes() -> Option<u64> {
+    let content = fs::read_to_string("/proc/meminfo").ok()?;
+    let kilobytes = content
+        .lines()
+        .find(|line| line.starts_with("MemTotal:"))?
+        .split_whitespace()
+        .nth(1)?
+        .parse::<u64>()
+        .ok()?;
+    Some(kilobytes.saturating_mul(1024))
+}
+
+fn local_cpu_name() -> String {
+    if let Ok(value) = std::env::var("PROCESSOR_IDENTIFIER") {
+        if !value.trim().is_empty() {
+            return value.trim().to_string();
+        }
+    }
+    fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|content| {
+            content.lines().find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                (key.trim() == "model name").then(|| value.trim().to_string())
+            })
+        })
+        .unwrap_or_else(|| "Unavailable without additional system access".to_string())
+}
+
+#[tauri::command]
+fn system_diagnostics() -> SystemDiagnostics {
+    let platform = platform_info();
+    SystemDiagnostics {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        os: platform.os,
+        architecture: platform.architecture,
+        cpu: local_cpu_name(),
+        memory_bytes: if cfg!(target_os = "linux") { linux_memory_bytes() } else { None },
+        steam_roots: platform
+            .steam_roots
+            .iter()
+            .map(|path| redact_sensitive_text(path))
+            .collect(),
+        flatpak_steam: platform.flatpak_steam,
+        steam_deck: platform.steam_deck,
+        desktop_session: platform.desktop_session,
+        secure_storage: platform.secure_storage,
+        package_formats: platform.package_formats,
+        notes: vec![
+            "Atlas diagnostics are generated locally.".to_string(),
+            "Home-directory paths, SteamIDs, email addresses, IP addresses, passwords, tokens, and API-key values are redacted from exports.".to_string(),
+            "No diagnostic report is uploaded automatically.".to_string(),
+        ],
+    }
+}
+
+fn sanitize_diagnostic_value(value: &mut Value) {
+    match value {
+        Value::String(text) => *text = redact_sensitive_text(text),
+        Value::Array(items) => items.iter_mut().for_each(sanitize_diagnostic_value),
+        Value::Object(object) => {
+            object.retain(|key, nested| {
+                let normalized = key
+                    .to_ascii_lowercase()
+                    .chars()
+                    .filter(|character| !matches!(character, '_' | '-' | ' '))
+                    .collect::<String>();
+                let safe = !["steamapikey", "steamladderapikey", "password", "accesstoken", "token"]
+                    .contains(&normalized.as_str());
+                if safe {
+                    sanitize_diagnostic_value(nested);
+                }
+                safe
+            });
+        }
+        _ => {}
+    }
+}
+
+#[tauri::command]
+fn export_diagnostics(json: String) -> Result<Option<String>, String> {
+    if json.len() > 2 * 1024 * 1024 {
+        return Err("The diagnostic report exceeds the 2 MiB export limit.".to_string());
+    }
+    let mut value: Value = serde_json::from_str(&json)
+        .map_err(|_| "The diagnostic report is not valid JSON.".to_string())?;
+    if !value.is_object() {
+        return Err("The diagnostic report must be a JSON object.".to_string());
+    }
+    sanitize_diagnostic_value(&mut value);
+    let content = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("Could not prepare the diagnostic report: {error}"))?;
+    let Some(path) = rfd::FileDialog::new()
+        .set_file_name("steam-atlas-diagnostics.json")
+        .add_filter("JSON", &["json"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    fs::write(&path, content)
+        .map_err(|error| format!("Could not export the diagnostic report: {error}"))?;
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -1332,6 +2051,57 @@ fn launch_external_tool(
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("The operating system could not launch this file: {error}"))
+}
+
+fn steam_launch_url(app_id: &str, args: &[String]) -> Result<String, String> {
+    if app_id.is_empty() || app_id.len() > 20 || !app_id.chars().all(|value| value.is_ascii_digit()) {
+        return Err("The Steam AppID must contain digits only.".to_string());
+    }
+    let parsed = app_id
+        .parse::<u64>()
+        .map_err(|_| "The Steam AppID is invalid.".to_string())?;
+    if parsed == 0 {
+        return Err("The Steam AppID must be greater than zero.".to_string());
+    }
+    if args.len() > 64
+        || args.iter().any(|value| {
+            value.len() > 2_048
+                || value.chars().any(|character| character == '\0' || character == '\r' || character == '\n')
+        })
+    {
+        return Err("The launch profile exceeds Atlas safety limits.".to_string());
+    }
+    let arguments = args
+        .iter()
+        .map(|value| urlencoding::encode(value).into_owned())
+        .collect::<Vec<_>>()
+        .join("%20");
+    if arguments.is_empty() {
+        Ok(format!("steam://run/{app_id}"))
+    } else {
+        Ok(format!("steam://run/{app_id}//{arguments}/"))
+    }
+}
+
+#[tauri::command]
+fn launch_steam_game(app_id: String, args: Vec<String>) -> Result<(), String> {
+    let url = steam_launch_url(&app_id, &args)?;
+    open::that(&url).map_err(|error| format!("Steam could not accept the launch request: {error}"))
+}
+
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    if path.len() > 32_768 || path.chars().any(|character| character == '\0') {
+        return Err("The selected path is invalid.".to_string());
+    }
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err("The selected file or folder no longer exists.".to_string());
+    }
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("Could not validate the selected path: {error}"))?;
+    open::that(path).map_err(|error| format!("The operating system could not reveal this path: {error}"))
 }
 
 #[tauri::command]
@@ -1559,6 +2329,8 @@ pub fn run() {
             platform_info,
             load_secrets,
             save_secrets,
+            load_user_data,
+            save_user_data,
             detect_steam_accounts,
             fetch_account_profile_no_key,
             scan_installed_games,
@@ -1569,9 +2341,19 @@ pub fn run() {
             choose_background_image,
             choose_folder,
             backup_folder,
+            preview_backup_restore,
+            restore_backup,
+            launch_steam_game,
+            reveal_path,
             scan_steam_screenshots,
+            scan_game_screenshots,
+            export_screenshot,
+            compare_config_files,
+            choose_workspace_artwork,
             scan_orphaned_game_folders,
             analyze_crash_log,
+            system_diagnostics,
+            export_diagnostics,
             export_portable_settings,
             import_portable_settings,
             hide_to_tray,
@@ -1619,5 +2401,34 @@ mod tests {
     fn vdf_capture_unescapes_windows_paths() {
         let value = capture_vdf_value(r#""path" "D:\\SteamLibrary""#, "path");
         assert_eq!(value.as_deref(), Some(r"D:\SteamLibrary"));
+    }
+
+    #[test]
+    fn steam_launch_url_encodes_explicit_argument_values() {
+        let url = steam_launch_url(
+            "730",
+            &["-novid".to_string(), "-w 1920".to_string()],
+        )
+        .unwrap();
+        assert_eq!(url, "steam://run/730//-novid%20-w%201920/");
+    }
+
+    #[test]
+    fn steam_launch_url_rejects_invalid_ids_and_multiline_arguments() {
+        assert!(steam_launch_url("not-a-number", &[]).is_err());
+        assert!(steam_launch_url("0", &[]).is_err());
+        assert!(steam_launch_url("730", &["-safe\n+quit".to_string()]).is_err());
+    }
+
+    #[test]
+    fn diagnostic_redaction_removes_common_sensitive_values() {
+        let redacted = redact_sensitive_text(
+            "steam=76561198012345678 email=user@example.com ip=192.168.1.2 api_key=secret",
+        );
+        assert!(!redacted.contains("76561198012345678"));
+        assert!(!redacted.contains("user@example.com"));
+        assert!(!redacted.contains("192.168.1.2"));
+        assert!(!redacted.contains("secret"));
+        assert!(redacted.contains("[STEAM_ID]"));
     }
 }
