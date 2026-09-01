@@ -57,7 +57,7 @@ jobs:
         run: npm run desktop:windows
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: steam-atlas-windows
           if-no-files-found: error
@@ -94,7 +94,7 @@ jobs:
       - name: Build Linux application
         run: npm run desktop:linux
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: steam-atlas-linux
           if-no-files-found: error
